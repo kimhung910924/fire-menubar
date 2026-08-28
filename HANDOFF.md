@@ -223,10 +223,22 @@ pgrep -f "Fire.app/Contents/MacOS/Fire"
 
 ---
 
+## 2-1. 위치와 저장소 (2026-08-28 이전)
+
+구글 드라이브에서 로컬로 옮겼다. 소스는 1MB인데 빌드 산출물 271M이 매 빌드마다
+드라이브 동기화를 갈고 있었다.
+
+- 경로: `~/Desktop/app-development/macapps/fire`
+- 저장소: https://github.com/kimhung910924/fire-menubar (공개)
+
+**옮긴 뒤 로그인 항목을 다시 등록해야 한다.** `SMAppService.mainApp`은 등록 당시 경로를
+물고 있어서, 설정 화면에서 "로그인 시 자동 실행"을 껐다 켜야 새 경로가 잡힌다.
+접근성·화면 기록 권한은 서명 신원에 묶여 있어 경로가 바뀌어도 유지된다(4.8절).
+
 ## 3. 빌드 · 실행 · 진단
 
 ```bash
-cd "/Users/kimheunggi/Library/CloudStorage/GoogleDrive-kimhung910924@gmail.com/내 드라이브/app develpment at gdrive/fire"
+cd "/Users/kimheunggi/Desktop/app-development/macapps/fire"
 ./build.sh release
 open build/Fire.app
 ```
