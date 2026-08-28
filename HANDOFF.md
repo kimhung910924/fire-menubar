@@ -5,6 +5,87 @@
 
 ---
 
+## 0. 지금 막힌 것 (2026-08-28 밤)
+
+**Fire Bar 아이콘을 눌러 연 메뉴가 1.5초쯤 뒤 저절로 닫힌다.**
+
+고쳐진 부분은 있다. 전에는 메뉴가 **화면 밖**(`x=-995`)에 열려 아무것도 안 보였고,
+지금은 **화면 안**(`x=674`)에 제대로 열린다. 남은 건 수명이다.
+
+### 결정적 단서
+
+**메뉴가 뜬 직후 Fire를 죽이면 메뉴가 그대로 유지된다.** 원인은 Fire 안에 있다.
+
+```
+0.3초  메뉴 열림 x=675  ← 여기서 Fire 종료
+0.4초  메뉴 열림 x=675  ← 이후 계속 유지
+```
+
+그런데 아래는 실험으로 전부 배제했다.
+
+| 후보 | 결과 |
+|---|---|
+| 숨김 복원(collapse) | 꺼도 닫힘. 메뉴가 닫히는 동안 구분자가 `x=909`로 고정인 것도 실측 |
+| 접근성 폴링(`frontmostMenuBarHasOpenMenu`) | 꺼도 닫힘 |
+| Fire Bar 패널 닫기(`orderOut`) | 진단 경로엔 없는데도 닫힘 |
+| 재구성·Watchdog | 트리거가 발생하지 않음(Watchdog은 15초 주기) |
+| 소유 앱 활성화, 커서 위치(`CGWarpMouseCursorPosition`) | 효과 없음 |
+| HiddenNotch의 오버레이 재구성 | HiddenNotch 1.2에서 고쳤으나 그대로 닫힘 |
+
+### 다음 단계
+
+Fire에 임시 로그를 넣어 **누른 뒤 무슨 일이 일어나는지 시각과 함께** 기록한다.
+`MenuBarScanner.scan()`, `ControlItemCoordinator.expand/collapse`, 각 타이머 진입점에
+`Diagnostics`의 결과 파일로 시각을 찍으면 범인이 나온다. 빌드 한 번, 측정 한 번이면 된다.
+
+### 측정 방법
+
+```bash
+# 누르기 (object = stableId)
+swift -e 'import Foundation; DistributedNotificationCenter.default().postNotificationName(.init("com.rrllab.FireMenuBar.diag.press"), object: "com.rrllab.HiddenNotch", userInfo: nil, deliverImmediately: true)'
+cat ~/Library/Application\ Support/Fire/diag-result.txt
+```
+
+메뉴 위치와 수명은 `CGWindowListCopyWindowInfo(.optionAll)`에서 레이어가
+`CGWindowLevelForKey(.popUpMenuWindow)`(=101)인 창을 0.1초 간격으로 보면 된다.
+구분자 위치는 같은 목록에서 이름이 `FireSeparatorItem`인 창을 본다.
+
+⚠️ **사용자가 컴퓨터를 쓰는 중이면 측정이 오염된다.** 다른 곳을 클릭한 것과 구분되지
+않는다. 실제로 이 때문에 "Workspace Shelf도 0.2초 만에 닫힌다"고 잘못 읽었다.
+
+⚠️ **알림을 보내는 헬퍼 프로세스가 끝나면서 포커스를 흔든다.** 보내기와 재기를 한
+프로세스 안에서 해야 깨끗하다.
+
+## 0-1. 사용자가 직접 해야 하는 것
+
+**HiddenNotch 아이콘이 물리적으로 맨 왼쪽에 있다.** 숨김은 "구분자보다 왼쪽 전부"라
+맨 왼쪽 항목은 무언가를 하나라도 숨기는 한 **절대 보일 수 없다.** MAIN으로 지정해도
+말려든다. Fire 자기 아이콘도 같은 이유로 숨겨지고 있다.
+
+측정한 물리적 순서 (`diag.dumpOrder`):
+
+```
+HiddenNotch > MenubarX > Gemini > Workspace Shelf > AudioVideo > Fire > Claude > Owly > ...
+```
+
+Claude를 숨기려면 구분자가 Claude 왼쪽에 와야 하고, 그러면 앞의 6개가 통째로 딸려간다.
+해결하려면 사용자가 Fire를 끄고 메뉴바에서 `⌘`+드래그로 HiddenNotch(와 Fire) 아이콘을
+Owly 오른쪽으로 옮겨야 한다. `⌘`+드래그는 macOS가 실제 사람의 입력으로만 받는다.
+
+## 0-2. 8/28 밤에 끝난 것
+
+- **배포 파이프라인** — `./scripts/release.sh --publish` 한 줄. 절차와 함정은
+  [docs/RELEASING.md](docs/RELEASING.md)
+- **Sparkle 자동 업데이트** — 0.1.0 → 0.1.1 자동 교체를 실측 확인. 피드는 rrllab.com
+- **앱 아이콘**, **CHANGELOG**, README 영어 기본 + `README.ko.md` 분리
+- 빌드 산출물이 `build/` → `.build/app/`으로 옮겨졌다(스팟라이트 색인 회피)
+
+**설치본 주의** — `/Applications/Fire.app`은 릴리즈된 0.1.1이 아니라 **그 뒤 Fire Bar
+수정이 들어간 로컬 빌드**다. 버전 문자열은 똑같이 0.1.1이라 구분이 안 된다.
+0.1.2로 올려 릴리즈해야 정리된다.
+
+---
+
 ## 1. 지금 상황 한 줄
 
 **2026-08-28 — 레이아웃 엔진이 자기 결과를 검증하고, 실패해도 쓸 수 있는 쪽으로 무너진다.**
