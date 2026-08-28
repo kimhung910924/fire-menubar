@@ -129,7 +129,7 @@ final class MenuBarScanner {
             let ownerName = axOwner?.appName
                 ?? bundleId.flatMap { Self.appName(forBundleId: $0) }
                 ?? systemName.map { Self.humanize($0) }
-                ?? "알 수 없음"
+                ?? L10n.t("알 수 없음", "Unknown")
 
             // Fire 자기 아이콘은 **고정 ID**를 쓴다. 스캔이 만들어내는 이름에 맡기면
             // 화면 구성에 따라 `sys:FireControlItem`과 `com.rrllab.FireMenuBar`를
@@ -449,7 +449,7 @@ final class MenuBarScanner {
                 guard frame.width > 0, frame.height > 0, frame.minX >= 0 else { continue }
                 owners.append(AXOwner(
                     bundleId: app.bundleIdentifier,
-                    appName: app.localizedName ?? "알 수 없음",
+                    appName: app.localizedName ?? L10n.t("알 수 없음", "Unknown"),
                     pid: app.processIdentifier,
                     title: Self.axString(of: item, kAXTitleAttribute)
                         ?? Self.axString(of: item, kAXDescriptionAttribute),

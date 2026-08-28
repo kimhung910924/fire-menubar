@@ -7,8 +7,8 @@ enum MenuBarSection: String, Codable, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .main: return "메뉴바에 표시"
-        case .fireBar: return "Fire Bar에 표시"
+        case .main: return L10n.t("메뉴바에 표시", "Show in Menu Bar")
+        case .fireBar: return L10n.t("Fire Bar에 표시", "Show in Fire Bar")
         }
     }
 }

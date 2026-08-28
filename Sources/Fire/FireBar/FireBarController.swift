@@ -130,6 +130,7 @@ final class FireBarController {
 
     func close(reason: CloseReason) {
         guard isOpen || panel != nil else { return }
+        Trace.log("firebar", "close reason=\(reason.rawValue) wasOpen=\(isOpen)")
         stopAutoCloseTimer()
         removeClickMonitors()
         isDraggingItem = false
@@ -137,7 +138,8 @@ final class FireBarController {
         panel?.orderOut(nil)
     }
 
-    private let emptyMessage = "Fire Bar가 비어 있습니다 — 설정에서 아이콘을 옮겨주세요"
+    private let emptyMessage = L10n.t("Fire Bar가 비어 있습니다 — 설정에서 아이콘을 옮겨주세요",
+                                      "Fire Bar is empty — move icons here in Settings")
 
     /// 아이콘 대신 안내 문구 하나만 그린다. 클릭하면 설정창이 열린다.
     private func showEmptyMessage(in panel: FireBarPanel, width: CGFloat) {
@@ -193,7 +195,7 @@ final class FireBarController {
             let view = FireBarItemView(
                 stableId: ControlItemCoordinator.fireIconStableId,
                 image: FireIcon.coloredImage(size: FireBarPanel.itemSize),
-                toolTip: "Fire 설정"
+                toolTip: L10n.t("Fire 설정", "Fire Settings")
             )
             view.onClick = {
                 FireBarController.shared.close(reason: .outsideClick)

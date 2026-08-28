@@ -79,7 +79,7 @@ final class LayoutEditorModel: ObservableObject {
                     // 지금 실행 중이 아닌 앱. 목록에는 남기되 흐리게 표시한다.
                     return EditorItem(
                         id: entry.stableId,
-                        name: entry.ownerName + " (실행 중 아님)",
+                        name: entry.ownerName + L10n.t(" (실행 중 아님)", " (not running)"),
                         shortLabel: Self.shortLabel(stableId: entry.stableId, ownerName: entry.ownerName),
                         image: NSImage(systemSymbolName: "questionmark.app.dashed",
                                        accessibilityDescription: nil) ?? NSImage(),
@@ -91,7 +91,8 @@ final class LayoutEditorModel: ObservableObject {
                 return EditorItem(
                     id: item.stableId,
                     name: item.isNotchConcealed
-                        ? item.displayName + " — 노치에 가려 메뉴바에서 보이지 않음"
+                        ? item.displayName + L10n.t(" — 노치에 가려 메뉴바에서 보이지 않음",
+                                                    " — concealed by the notch, not visible in the menu bar")
                         : item.displayName,
                     shortLabel: Self.shortLabel(stableId: item.stableId, ownerName: item.ownerName),
                     image: layout.icon(for: item),
@@ -177,7 +178,7 @@ final class LayoutEditorModel: ObservableObject {
             // 원하는 자리 오른쪽의 항목 전부를 넘긴다. 첫 항목이 마침 스캔에 없어도
             // 그다음 항목을 기준으로 삼을 수 있어야 이동이 엉뚱한 곳으로 튀지 않는다.
             let followers = Array(main.drop(while: { $0 != id }).dropFirst())
-            statusMessage = "Fire 아이콘을 옮기는 중…"
+            statusMessage = L10n.t("Fire 아이콘을 옮기는 중…", "Moving the Fire icon…")
             layout?.moveFireIcon(beforeAnyOf: followers) { [weak self] in
                 self?.reload()
                 self?.statusMessage = nil
@@ -192,7 +193,10 @@ final class LayoutEditorModel: ObservableObject {
             // MAIN 안에서 남의 아이콘을 옮기려 한 경우 — macOS가 허용하지 않는다.
             // 조용히 제자리로 돌아가면 고장으로 보이므로 이유를 알려준다.
             if section == .main {
-                statusMessage = "메뉴바 안 순서는 Fire가 바꿀 수 없습니다(macOS 제한). 메뉴바에서 ⌘ 키를 누른 채 아이콘을 직접 끌어 옮겨주세요. Fire 아이콘만 여기서 옮길 수 있습니다."
+                statusMessage = L10n.t(
+                    "메뉴바 안 순서는 Fire가 바꿀 수 없습니다(macOS 제한). 메뉴바에서 ⌘ 키를 누른 채 아이콘을 직접 끌어 옮겨주세요. Fire 아이콘만 여기서 옮길 수 있습니다.",
+                    "macOS doesn't let Fire reorder the actual menu bar. ⌘-drag icons directly in the menu bar instead — only the Fire icon can be moved here."
+                )
             }
             return
         }
@@ -206,7 +210,7 @@ final class LayoutEditorModel: ObservableObject {
 
     private func scheduleMenuBarSync() {
         syncWorkItem?.cancel()
-        statusMessage = "메뉴바에 적용하는 중…"
+        statusMessage = L10n.t("메뉴바에 적용하는 중…", "Applying to the menu bar…")
 
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -229,14 +233,24 @@ final class LayoutEditorModel: ObservableObject {
         guard !moves.isEmpty else {
             let stuck = (mainItems + fireBarItems).filter(\.isMisplaced).map(\.shortLabel)
             guard !stuck.isEmpty else { return nil }
-            return "\(stuck.joined(separator: ", "))은(는) 지정대로 적용되지 않았습니다."
+            let names = stuck.joined(separator: ", ")
+            return L10n.t(
+                "\(names)은(는) 지정대로 적용되지 않았습니다. 메뉴바에서 ⌘ 키를 누른 채 그 아이콘을 직접 끌어 옮겨주세요.",
+                "\(names) could not be applied as assigned. ⌘-drag those icons directly in the menu bar."
+            )
         }
-        return """
-            숨김은 메뉴바에서 이어진 구간에만 걸립니다. 지금 분류는 이어져 있지 않습니다.
-            아래대로 옮기면 그대로 적용됩니다.
+        return L10n.t("""
+            숨김은 메뉴바에서 이어진 구간에만 걸립니다. 지금 분류는 이어져 있지 않아 \
+            일부가 적용되지 않았습니다(주황색). 메뉴바에서 아래대로 ⌘+드래그하면 그대로 적용됩니다.
 
             \(moves.joined(separator: "\n"))
-            """
+            """, """
+            Hiding only works on a contiguous run of the menu bar. Your current assignment \
+            isn't contiguous, so part of it could not be applied (shown in orange). \
+            ⌘-drag in the menu bar as listed below and it will apply exactly.
+
+            \(moves.joined(separator: "\n"))
+            """)
     }
 
     /// 연속 구간으로 만들려면 무엇을 어디로 `⌘`+드래그해야 하는지.
@@ -250,9 +264,11 @@ final class LayoutEditorModel: ObservableObject {
             .filter { $0.stableId != ControlItemCoordinator.fireIconStableId }
             .map { BarItem(stableId: $0.stableId, minX: $0.frame.minX, width: $0.frame.width) }
         return ContiguityAdvisor.advice(items: barItems, hiddenIds: hiddenIds).map { advice in
-            ContiguityAdvisor.sentence(for: advice) { id in
-                layout.item(withId: id)?.ownerName ?? id
-            }
+            let name = { (id: String) in layout.item(withId: id)?.ownerName ?? id }
+            return L10n.t(
+                "\(name(advice.itemId))를 \(name(advice.toRightOfId)) 오른쪽으로 ⌘+드래그하세요.",
+                "⌘-drag \(name(advice.itemId)) to the right of \(name(advice.toRightOfId))."
+            )
         }
     }
 
@@ -263,16 +279,16 @@ final class LayoutEditorModel: ObservableObject {
         layout?.rescan()
         layout?.applySectionsVerified()
         reload()
-        statusMessage = "아이콘을 다시 검색했습니다."
+        statusMessage = L10n.t("아이콘을 다시 검색했습니다.", "Rescanned the menu bar icons.")
     }
 
     /// 기획안 21절 — 메뉴바 상태 다시 적용.
     func rebuildEverything() {
         rebuilder?.requestRebuild(trigger: .manual, debounce: 0)
-        statusMessage = "메뉴바 상태를 다시 적용하는 중입니다."
+        statusMessage = L10n.t("메뉴바 상태를 다시 적용하는 중입니다.", "Reapplying the menu bar state…")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.reload()
-            self?.statusMessage = "메뉴바 상태를 다시 적용했습니다."
+            self?.statusMessage = L10n.t("메뉴바 상태를 다시 적용했습니다.", "Menu bar state reapplied.")
         }
     }
 
@@ -286,7 +302,9 @@ final class LayoutEditorModel: ObservableObject {
         let live = Set(layout.discoveredItems.map(\.stableId))
         let removed = SettingsStore.shared.removeItems(notIn: live)
         reload()
-        statusMessage = removed > 0 ? "\(removed)개 항목을 목록에서 지웠습니다." : nil
+        statusMessage = removed > 0
+            ? L10n.t("\(removed)개 항목을 목록에서 지웠습니다.", "Removed \(removed) item(s) from the list.")
+            : nil
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -296,7 +314,8 @@ final class LayoutEditorModel: ObservableObject {
             statusMessage = nil
         case .failure(let error):
             launchAtLogin = LoginItemManager.isEnabled
-            statusMessage = "로그인 항목 설정 실패: \(error.localizedDescription)"
+            statusMessage = L10n.t("로그인 항목 설정 실패: \(error.localizedDescription)",
+                                   "Failed to update the login item: \(error.localizedDescription)")
         }
     }
 }
@@ -340,7 +359,8 @@ struct LayoutEditorView: View {
             Image(nsImage: FireIcon.coloredImage(size: 28))
             VStack(alignment: .leading, spacing: 1) {
                 Text("Fire").font(.title2.bold())
-                Text("메뉴바 아이콘을 두 구역으로 정리합니다")
+                Text(L10n.t("메뉴바 아이콘을 두 구역으로 정리합니다",
+                            "Organizes your menu bar icons into two sections"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -350,18 +370,20 @@ struct LayoutEditorView: View {
     private var permissionSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             permissionRow(
-                title: "손쉬운 사용",
+                title: L10n.t("손쉬운 사용", "Accessibility"),
                 granted: model.accessibilityGranted,
-                detail: "메뉴바 항목 탐색과 클릭에 필요합니다",
+                detail: L10n.t("메뉴바 항목 탐색과 클릭에 필요합니다",
+                               "Needed to discover and click menu bar items"),
                 action: {
                     AccessibilityPermissionManager.shared.requestPermission()
                     AccessibilityPermissionManager.shared.openSystemSettings()
                 }
             )
             permissionRow(
-                title: "화면 기록",
+                title: L10n.t("화면 기록", "Screen Recording"),
                 granted: model.screenCaptureGranted,
-                detail: "실제 아이콘 모양을 보여주는 데만 사용합니다",
+                detail: L10n.t("실제 아이콘 모양을 보여주는 데만 사용합니다",
+                               "Used only to show the actual icon images"),
                 action: {
                     ScreenCapturePermissionManager.shared.requestPermission()
                     ScreenCapturePermissionManager.shared.openSystemSettings()
@@ -374,16 +396,34 @@ struct LayoutEditorView: View {
 
     private func permissionRow(title: String, granted: Bool, detail: String,
                                action: @escaping () -> Void) -> some View {
-        HStack {
-            Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(granted ? Color.green : Color.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.callout.weight(.medium))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(granted ? Color.green : Color.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.callout.weight(.medium))
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !granted {
+                    Button(L10n.t("권한 열기", "Open Settings"), action: action).controlSize(.small)
+                }
             }
-            Spacer()
+            // 서명이 바뀐 빌드는 macOS가 다른 앱으로 취급한다. 그러면 시스템 설정
+            // 토글은 켜져 있는데 실제 권한은 거부되는 상태가 된다(2026-08-29 실측).
+            // 사용자에게는 "켜져 있는데 왜 안 되냐"로 보이므로, 이 경우의 출구를 함께 준다.
             if !granted {
-                Button("권한 열기", action: action).controlSize(.small)
+                HStack(spacing: 6) {
+                    Text(L10n.t("시스템 설정에 이미 켜져 있다고 나오나요? 낡은 권한 기록입니다.",
+                                "Already on in System Settings? That's a stale permission record."))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                    Button(L10n.t("기록 초기화", "Reset Record")) {
+                        AccessibilityPermissionManager.resetStaleGrants()
+                        action()
+                    }
+                    .controlSize(.mini)
+                }
+                .padding(.leading, 24)
             }
         }
     }
@@ -393,15 +433,17 @@ struct LayoutEditorView: View {
             HStack(spacing: 6) {
                 Text(section.displayName).font(.headline)
                 Text(section == .main
-                     ? "실제 메뉴바 순서 — Fire 아이콘만 옮길 수 있습니다"
-                     : "Fire Bar에 그릴 순서")
+                     ? L10n.t("실제 메뉴바 순서 — 다른 앱 아이콘은 메뉴바에서 ⌘+드래그로 직접 옮기세요. 여기서는 Fire 아이콘만 옮겨집니다",
+                              "Actual menu bar order — ⌘-drag other apps' icons in the menu bar itself. Only the Fire icon can be moved here")
+                     : L10n.t("Fire Bar에 그릴 순서 — 자유롭게 드래그하세요",
+                              "Order drawn in the Fire Bar — drag freely"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
 
             HStack(spacing: 8) {
                 if items.isEmpty {
-                    Text("여기로 아이콘을 끌어다 놓으세요")
+                    Text(L10n.t("여기로 아이콘을 끌어다 놓으세요", "Drag icons here"))
                         .font(.caption).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -486,7 +528,8 @@ struct LayoutEditorView: View {
                 .fill(item.isMisplaced ? Color.orange.opacity(0.25) : Color.clear)
         )
         .help(item.isMisplaced
-              ? "\(item.name) — 아직 실제 메뉴바에서 숨겨지지 않았습니다"
+              ? L10n.t("\(item.name) — 아직 실제 메뉴바에서 숨겨지지 않았습니다",
+                       "\(item.name) — not yet hidden in the actual menu bar")
               : item.name)
     }
 
@@ -509,10 +552,13 @@ struct LayoutEditorView: View {
     private var unidentifiedSection: some View {
         if !model.unidentifiedItems.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("확인 필요 \(model.unidentifiedItems.count)개").font(.headline)
+                Text(L10n.t("확인 필요 \(model.unidentifiedItems.count)개",
+                            "\(model.unidentifiedItems.count) need review")).font(.headline)
                 Text(model.accessibilityGranted
-                     ? "소유 앱을 확정하지 못한 항목입니다. 배치를 저장할 수 없어 메인 메뉴바에 그대로 둡니다."
-                     : "손쉬운 사용 권한이 없어 소유 앱을 알 수 없습니다. 권한을 켜면 대부분 자동으로 인식됩니다.")
+                     ? L10n.t("소유 앱을 확정하지 못한 항목입니다. 배치를 저장할 수 없어 메인 메뉴바에 그대로 둡니다.",
+                              "The owning app could not be determined, so these stay in the main menu bar and their placement can't be saved.")
+                     : L10n.t("손쉬운 사용 권한이 없어 소유 앱을 알 수 없습니다. 권한을 켜면 대부분 자동으로 인식됩니다.",
+                              "Without Accessibility permission the owning apps are unknown. Grant it and most are recognized automatically."))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -534,18 +580,27 @@ struct LayoutEditorView: View {
 
     private var hintText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("숨김은 왼쪽부터 이어진 구간에만 걸립니다").font(.callout.weight(.medium))
-            Text("""
+            Text(L10n.t("숨김은 왼쪽부터 이어진 구간에만 걸립니다",
+                        "Hiding only works on a contiguous run from the left"))
+                .font(.callout.weight(.medium))
+            Text(L10n.t("""
                  macOS는 앱이 다른 앱의 메뉴바 아이콘 순서를 바꾸는 것을 허용하지 않습니다. \
                  그래서 Fire는 경계를 하나 잡고 그 **왼쪽 전체**를 숨깁니다. 경계 위치는 자동으로 맞춥니다.
-                 """)
+                 """, """
+                 macOS doesn't let one app reorder another app's menu bar icons. \
+                 So Fire picks a single boundary and hides **everything to its left**. \
+                 The boundary position is adjusted automatically.
+                 """))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("""
+            Text(L10n.t("""
                  주황색 아이콘은 지정과 실제가 어긋난 것입니다. 위 목록에서 이어지도록 다시 지정하거나, \
                  메뉴바에서 ⌘ 키를 누른 채 그 아이콘을 옮겨 순서를 맞춰주세요.
-                 """)
+                 """, """
+                 Orange icons are where your assignment and reality disagree. Reassign them into \
+                 a contiguous run above, or ⌘-drag those icons in the menu bar to match the order.
+                 """))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -553,7 +608,7 @@ struct LayoutEditorView: View {
             let moves = model.contiguityAdvice()
             if !moves.isEmpty {
                 Divider().padding(.vertical, 2)
-                Text("이렇게 옮기면 됩니다").font(.caption.weight(.medium))
+                Text(L10n.t("이렇게 옮기면 됩니다", "Make these moves")).font(.caption.weight(.medium))
                 ForEach(moves, id: \.self) { move in
                     Text("• \(move)")
                         .font(.caption)
@@ -568,16 +623,16 @@ struct LayoutEditorView: View {
 
     private var optionsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle("로그인 시 자동 실행", isOn: Binding(
+            Toggle(L10n.t("로그인 시 자동 실행", "Launch at Login"), isOn: Binding(
                 get: { model.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }
             ))
             HStack(spacing: 8) {
-                Toggle("업데이트 자동 확인", isOn: Binding(
+                Toggle(L10n.t("업데이트 자동 확인", "Automatically Check for Updates"), isOn: Binding(
                     get: { UpdateController.shared.automaticallyChecks },
                     set: { UpdateController.shared.automaticallyChecks = $0 }
                 ))
-                Button("지금 확인") { UpdateController.shared.checkForUpdates() }
+                Button(L10n.t("지금 확인", "Check Now")) { UpdateController.shared.checkForUpdates() }
                     .controlSize(.small)
             }
         }
@@ -585,23 +640,24 @@ struct LayoutEditorView: View {
 
     private var shortcutSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("단축키").font(.headline)
-            HStack { Text("Fire Bar 열기/닫기"); Spacer(); Text("⌥⌘F").monospaced() }
-            HStack { Text("설정 열기"); Spacer(); Text("⌥⌘,").monospaced() }
-            HStack { Text("Fire Bar 닫기"); Spacer(); Text("esc").monospaced() }
+            Text(L10n.t("단축키", "Shortcuts")).font(.headline)
+            HStack { Text(L10n.t("Fire Bar 열기/닫기", "Toggle Fire Bar")); Spacer(); Text("⌥⌘F").monospaced() }
+            HStack { Text(L10n.t("설정 열기", "Open Settings")); Spacer(); Text("⌥⌘,").monospaced() }
+            HStack { Text(L10n.t("Fire Bar 닫기", "Close Fire Bar")); Spacer(); Text("esc").monospaced() }
         }
         .font(.callout)
     }
 
     private var recoverySection: some View {
         HStack {
-            Button("아이콘 다시 검색") { model.rescan() }
-            Button("메뉴바 상태 다시 적용") { model.rebuildEverything() }
+            Button(L10n.t("아이콘 다시 검색", "Rescan Icons")) { model.rescan() }
+            Button(L10n.t("메뉴바 상태 다시 적용", "Reapply Menu Bar State")) { model.rebuildEverything() }
             if model.missingCount > 0 {
-                Button("사라진 항목 \(model.missingCount)개 정리") { model.removeMissingItems() }
+                Button(L10n.t("사라진 항목 \(model.missingCount)개 정리",
+                              "Clean Up \(model.missingCount) Missing Item(s)")) { model.removeMissingItems() }
             }
             Spacer()
-            Button("종료") { NSApp.terminate(nil) }
+            Button(L10n.t("종료", "Quit")) { NSApp.terminate(nil) }
         }
     }
 }
