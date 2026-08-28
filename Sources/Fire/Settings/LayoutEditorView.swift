@@ -567,10 +567,20 @@ struct LayoutEditorView: View {
     }
 
     private var optionsSection: some View {
-        Toggle("로그인 시 자동 실행", isOn: Binding(
-            get: { model.launchAtLogin },
-            set: { model.setLaunchAtLogin($0) }
-        ))
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("로그인 시 자동 실행", isOn: Binding(
+                get: { model.launchAtLogin },
+                set: { model.setLaunchAtLogin($0) }
+            ))
+            HStack(spacing: 8) {
+                Toggle("업데이트 자동 확인", isOn: Binding(
+                    get: { UpdateController.shared.automaticallyChecks },
+                    set: { UpdateController.shared.automaticallyChecks = $0 }
+                ))
+                Button("지금 확인") { UpdateController.shared.checkForUpdates() }
+                    .controlSize(.small)
+            }
+        }
     }
 
     private var shortcutSection: some View {

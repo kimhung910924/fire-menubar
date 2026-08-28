@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuilder.requestRebuild(trigger: .launch, debounce: 0.2)
 
         watchdog.start()
+        UpdateController.shared.start()
         SettingsStore.shared.pruneStaleItems()
 
         // 셸에서 Fire Bar를 열고 아이콘을 눌러볼 수 있는 검증용 훅.
