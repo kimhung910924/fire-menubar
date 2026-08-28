@@ -10,7 +10,9 @@ cd "$(dirname "$0")"
 
 CONFIG="${1:-release}"
 APP_NAME="Fire"
-BUNDLE="build/${APP_NAME}.app"
+# 출력을 .build 아래(숨김 폴더)에 둔다. 그냥 build/에 두면 스팟라이트가 색인해서
+# 응용 프로그램 검색에 빌드 산출물이 설치본과 나란히 뜬다 (2026-08-28 실측).
+BUNDLE=".build/app/${APP_NAME}.app"
 
 echo "==> 빌드 (${CONFIG})"
 swift build -c "$CONFIG" --disable-sandbox

@@ -1,6 +1,26 @@
 # Fire
 
-macOS 메뉴바 아이콘을 **메인 메뉴바**와 **Fire Bar** 두 구역으로 정리하는 메뉴바 유틸리티.
+macOS 메뉴바 아이콘을 **메인 메뉴바**와 **Fire Bar** 두 구역으로 정리하는 초경량 메뉴바 앱.
+
+아이콘이 많아 메뉴바가 넘치면 필요할 때만 꺼내 쓰도록 접어둔다.
+앱 1.3MB, 상주 메모리 74MB. Dock 아이콘 없이 메뉴바에만 산다.
+
+## 다운로드
+
+**[Fire 0.1.0 내려받기 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
+
+- macOS 14 Sonoma 이상
+- Apple 공증을 마쳤다. 경고 없이 열린다
+- dmg를 열고 Fire를 `응용 프로그램`으로 끌어다 놓는다
+
+처음 실행하면 **손쉬운 사용**과 **화면 기록** 권한을 요청한다.
+메뉴바 아이콘을 옮기고 모양을 읽는 데 쓴다. 화면 내용은 저장하거나 전송하지 않는다.
+
+## 문의
+
+[rrllab.com](https://rrllab.com) · contact@rrllab.com
+
+---
 
 기획안: [Fire_맥_메뉴바_앱_기획안.md](Fire_맥_메뉴바_앱_기획안.md)
 
@@ -20,6 +40,13 @@ open build/Fire.app
 
 ```bash
 ./build/Fire.app/Contents/MacOS/Fire --dump
+```
+
+### 배포본 만들기
+
+```bash
+./scripts/release.sh            # Developer ID 서명·공증·dmg
+./scripts/release.sh --publish  # GitHub 릴리즈 업로드까지
 ```
 
 ## 최초 설정

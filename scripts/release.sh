@@ -26,7 +26,7 @@ APP_NAME="Fire"
 IDENTITY="Developer ID Application: RRLLAB (D9FZ6BL5FD)"
 SECRETS="${NOTARIZE_ENV:-$HOME/Desktop/app-development/omniai/_secrets/notarize.env}"
 
-APP="build/${APP_NAME}.app"
+APP=".build/app/${APP_NAME}.app"
 DIST="dist"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
 DMG="${DIST}/${APP_NAME}-${VERSION}.dmg"
