@@ -24,6 +24,7 @@ mkdir -p "$BUNDLE/Contents/Resources"
 
 cp "$BIN_PATH/$APP_NAME" "$BUNDLE/Contents/MacOS/$APP_NAME"
 cp Resources/Info.plist "$BUNDLE/Contents/Info.plist"
+cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$BUNDLE/Contents/PkgInfo"
 
 # 손쉬운 사용·화면 기록 권한은 코드 서명 신원에 묶인다.
