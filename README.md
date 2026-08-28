@@ -1,6 +1,7 @@
 # Fire
 
 *[한국어](README.ko.md)*
+*[Changelog](CHANGELOG.md)* · *[Releasing](docs/RELEASING.md)*
 
 A tiny macOS menu bar app that sorts menu bar icons into two zones: the **main menu bar**
 and the **Fire Bar**.
@@ -12,7 +13,7 @@ and come back only when you ask for them.
 
 ## Download
 
-**[Get Fire 0.1.0 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
+**[Get Fire 0.1.1 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
 
 - macOS 14 Sonoma or later
 - Notarized by Apple, so it opens without a Gatekeeper warning

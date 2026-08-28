@@ -1,6 +1,7 @@
 # Fire
 
 *[English](README.md)*
+*[변경 이력](CHANGELOG.md)* · *[릴리즈 방법](docs/RELEASING.md)*
 
 macOS 메뉴바 아이콘을 **메인 메뉴바**와 **Fire Bar** 두 구역으로 정리하는 초경량 메뉴바 앱.
 
@@ -9,7 +10,7 @@ macOS 메뉴바 아이콘을 **메인 메뉴바**와 **Fire Bar** 두 구역으�
 
 ## 다운로드
 
-**[Fire 0.1.0 내려받기 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
+**[Fire 0.1.1 내려받기 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
 
 - macOS 14 Sonoma 이상
 - Apple 공증을 마쳤다. 경고 없이 열린다

@@ -43,7 +43,20 @@ final class MenuBarActionProxy {
         }
 
         // 1순위 — 접근성 액션 (좌클릭 AXPress / 우클릭 AXShowMenu).
-        if performViaAccessibility(item, action: secondary ? kAXShowMenuAction : kAXPressAction) {
+        //
+        // 단, **항목이 화면 안에 있을 때만** 쓴다. 숨겨서 화면 왼쪽 밖에 밀어둔 항목에도
+        // AXPress 자체는 성공하지만, 열린 메뉴가 그 항목의 좌표를 따라가 화면 밖에 뜬다.
+        // 성공을 반환하니 호출부는 다음 경로로 넘어가지도 않아서, 사용자에게는
+        // "눌러도 아무 일이 없다"로 보인다. Fire Bar에 있는 항목은 정의상 숨겨져 있으므로
+        // 거의 항상 아래의 "숨김 풀고 누르기" 경로를 탄다.
+        // (2026-08-28 실측: 숨긴 채 누르니 메뉴가 149x176 크기로 x=-1043에 열렸다.)
+        // `frame`만으로는 판단할 수 없다. 창이 없는 항목(windowNumber == 0)은 접근성이
+        // 보고하는 좌표가 실제 위치와 다르다 — 화면이 1470pt인데 x=2643으로 나온다.
+        // 실제 창이 있고 화면 안에 있을 때만 지름길을 쓴다.
+        let hasRealWindowOnScreen = item.windowNumber != 0 && !item.isNotchConcealed
+            && item.frame.minX >= 0
+        if hasRealWindowOnScreen,
+           performViaAccessibility(item, action: secondary ? kAXShowMenuAction : kAXPressAction) {
             completion(.pressed)
             return
         }
@@ -51,11 +64,32 @@ final class MenuBarActionProxy {
         // 2·3순위 — 숨김을 잠시 풀어 원본을 실제 메뉴바에 되돌린 뒤 그 좌표를 클릭한다.
         // 숨긴 상태에서는 항목이 화면 밖에 있어 좌표 클릭이 성립하지 않기 때문에 순서가 중요하다.
         controlItems.withItemsTemporarilyVisible { finish in
-            // 메뉴바 레이아웃이 다시 잡힐 시간을 준다.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                guard let refreshed = Self.refreshedItem(for: item) else {
+            // 항목이 실제로 화면 안으로 돌아올 때까지 기다린다.
+            //
+            // 예전에는 0.12초를 세고 눌렀다. 그 사이 macOS가 레이아웃을 다시 잡지 못하면
+            // 항목이 아직 숨긴 자리(화면 왼쪽 밖)에 있고, 거기서 AXPress를 하면
+            // **메뉴가 화면 밖에 열린다.** 사용자에게는 "눌러도 아무 일이 없다"로 보인다.
+            // (2026-08-28 실측: HiddenNotch 메뉴가 149x176 크기로 x=-995에 열렸다.)
+            //
+            // 그래서 시간이 아니라 조건을 기다린다.
+            Self.waitUntilOnScreen(item) { refreshed in
+                guard let refreshed else {
                     finish()
                     completion(.failed("원본 아이콘을 찾지 못했습니다"))
+                    return
+                }
+
+                // 접근성을 여기서 한 번 더 시도한다.
+                //
+                // 위(1순위)에서 실패한 이유는 앱이 액션을 구현하지 않아서가 아니라
+                // 항목이 화면 밖에 있어 `AXExtrasMenuBar`에 나오지 않았기 때문일 수 있다.
+                // 숨김을 푼 지금은 목록에 잡힌다. 접근성은 노치에 가려졌는지와 무관하므로,
+                // 좌표 클릭이 성립하지 않는 항목도 이 경로로 열린다. (2026-08-28 실측:
+                // 내장 화면 1470pt에서 숨김을 풀면 항목 절반이 노치 뒤로 들어간다.)
+                if self.performViaAccessibility(refreshed, action: secondary ? kAXShowMenuAction : kAXPressAction) {
+                    // 메뉴가 열려 있는 동안 숨김을 되돌리면 메뉴가 닫힌다.
+                    Self.waitForMenuToClose { finish() }
+                    completion(.pressed)
                     return
                 }
                 // 노치에 가려진 항목은 화면에 없어 일반 좌표 클릭이 성립하지 않는다.
@@ -70,8 +104,12 @@ final class MenuBarActionProxy {
                     }
                     Self.synthesizeClick(at: CGPoint(x: refreshed.frame.midX, y: refreshed.frame.midY),
                                          rightButton: secondary, directToPid: pid)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-                        if Self.isSystemMenuOpen() {
+                    // 메뉴가 뜨는 데 걸리는 시간은 앱마다 다르다. 0.7초에 한 번만 보면
+                    // 그 뒤에 뜬 메뉴를 놓치고 실패로 처리해, 숨김을 되돌리며 방금 뜬 메뉴를
+                    // 닫아버린다. 사용자에게는 메뉴가 잠깐 번쩍이고 사라지는 걸로 보인다.
+                    // (2026-08-28 실측) 그래서 시간이 아니라 조건을 기다린다.
+                    Self.waitForMenuToOpen { opened in
+                        if opened {
                             Self.waitForMenuToClose { finish() }
                             completion(.clicked)
                         } else {
@@ -90,6 +128,29 @@ final class MenuBarActionProxy {
                 completion(.clicked)
             }
         }
+    }
+
+    /// 숨김을 푼 뒤 항목이 화면 안으로 돌아올 때까지 기다린다.
+    ///
+    /// 노치에 가려진 자리(x가 노치 구간)는 화면 안으로 친다 — 항목 자체는 안 보여도
+    /// 거기서 연 메뉴는 노치 아래로 펼쳐져 보이기 때문이다. 화면 왼쪽 밖(x<0)만 기다린다.
+    private static func waitUntilOnScreen(_ item: MenuBarItem, timeout: TimeInterval = 1.5,
+                                          _ completion: @escaping (MenuBarItem?) -> Void) {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        func poll() {
+            let refreshed = refreshedItem(for: item)
+            if let refreshed, refreshed.frame.minX >= 0 {
+                completion(refreshed)
+                return
+            }
+            if Date() > deadline {
+                completion(refreshed)   // 끝내 안 돌아오면 있는 그대로 넘긴다
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
+        }
+        poll()
     }
 
     // MARK: 1순위 — 접근성 액션
@@ -120,6 +181,14 @@ final class MenuBarActionProxy {
             guard let target else { continue }
 
             if AXUIElementPerformAction(target, action as CFString) == .success {
+                // 메뉴를 연 앱을 앞으로 가져온다.
+                //
+                // AXPress는 메뉴를 열기만 하고 앱을 활성화하지는 않는다. 활성 앱이 아니면
+                // macOS가 1~2초 뒤 메뉴를 스스로 거둬간다. 사용자에게는 메뉴가 잠깐
+                // 떴다가 저절로 닫히는 걸로 보인다. (2026-08-28 실측: 0.2초에 열려
+                // 1.8초에 사라졌고, 그동안 Fire는 아무것도 하지 않았다.)
+                NSRunningApplication(processIdentifier: pid)?
+                    .activate(options: [.activateIgnoringOtherApps])
                 return true
             }
         }
@@ -179,6 +248,19 @@ final class MenuBarActionProxy {
             down?.post(tap: .cghidEventTap)
             up?.post(tap: .cghidEventTap)
         }
+    }
+
+    /// 메뉴가 열릴 때까지 기다린다. 열리면 `true`, 시간 안에 안 열리면 `false`.
+    private static func waitForMenuToOpen(timeout: TimeInterval = 2.5,
+                                          _ completion: @escaping (Bool) -> Void) {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        func poll() {
+            if isSystemMenuOpen() { completion(true); return }
+            if Date() > deadline { completion(false); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() }
     }
 
     /// 메뉴가 닫힐 때까지 기다린다. 열린 메뉴가 있으면 시스템 전역에 `AXMenu` 창이 떠 있다.

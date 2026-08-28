@@ -138,7 +138,7 @@ if [ -d "$SITE" ]; then
 <title>${APP_NAME} ${VERSION}</title>
 <h2>${APP_NAME} ${VERSION}</h2>
 <ul>
-  <li>여기에 이번 버전에서 바뀐 것을 적는다.</li>
+  <li>이번 버전에서 달라진 점을 여기에 적어 주세요. 사용자가 업데이터에서 그대로 읽습니다.</li>
 </ul>
 HTML
         echo "  릴리즈 노트 초안: $NOTES  ← 내용을 채울 것"

@@ -220,16 +220,22 @@ final class FireBarController {
 
     private func activate(_ item: MenuBarItem, secondary: Bool = false) {
         stopAutoCloseTimer()
-        let handler: (MenuBarActionProxy.Result) -> Void = { [weak self] result in
-            guard let self else { return }
+
+        // 패널을 **먼저** 닫는다. 순서가 반대면 메뉴가 열리자마자 닫힌다.
+        //
+        // 예전에는 메뉴가 열린 걸 확인한 뒤에 닫았다. 그런데 `orderOut`이 포커스를 옮기고,
+        // status item 메뉴는 포커스를 잃으면 쫓겨난다. 실측하면 메뉴가 0.9초쯤 떠 있다가
+        // 스스로 사라졌고, Fire가 숨김을 되돌리기 시작한 건 그보다 0.3초 뒤였다 —
+        // 즉 숨김 복원이 아니라 이 `close`가 범인이었다. (2026-08-28)
+        close(reason: .outsideClick)
+
+        let handler: (MenuBarActionProxy.Result) -> Void = { result in
             switch result {
             case .pressed, .clicked:
-                // 메뉴가 열렸으니 Fire Bar는 비켜준다. 닫힌 뒤 타이머를 다시 시작할 대상이 없다.
-                self.close(reason: .outsideClick)
+                break
             case .failed(let message):
                 NSLog("[Fire] 아이콘 활성화 실패: \(message)")
                 NSSound.beep()
-                self.restartAutoCloseTimer()
             }
         }
         if secondary {
