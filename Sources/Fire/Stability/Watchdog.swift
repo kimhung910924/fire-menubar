@@ -94,6 +94,7 @@ final class Watchdog {
         if let last = lastSnapshot,
            last.isCollapsed == snapshot.isCollapsed,
            last.statusItemCount != snapshot.statusItemCount {
+            Trace.log("watchdog", "항목 수 변화 감지 → 재구성 \(last.statusItemCount) → \(snapshot.statusItemCount)")
             mismatchStreak = 0
             lastIssue = nil
             rebuilder.requestRebuild(trigger: .watchdog)

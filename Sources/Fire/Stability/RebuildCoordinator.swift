@@ -59,6 +59,7 @@ final class RebuildCoordinator {
 
     /// 재구성을 요청한다. 짧은 시간에 여러 번 불려도 한 번만 실행된다.
     func requestRebuild(trigger: Trigger, debounce: TimeInterval = 0.15) {
+        Trace.log("rebuild", "requestRebuild trigger=\(trigger) state=\(state)")
         // 이미 돌고 있으면 예약만 해둔다. 끝난 뒤 마지막에 한 번 더 돈다(기획안 15절).
         guard state == .idle else {
             pendingTrigger = trigger
@@ -77,6 +78,7 @@ final class RebuildCoordinator {
 
     /// 기획안 15절의 9단계를 그대로 따른다.
     private func performRebuild(trigger: Trigger) {
+        Trace.log("rebuild", "performRebuild trigger=\(trigger)")
         setState(.rebuilding)
         cancelPendingVerifications()
 

@@ -108,6 +108,7 @@ final class ControlItemCoordinator {
     func collapse() {
         guard let separatorItem else { return }
         guard !isCollapsed else { return }
+        Trace.log("control", "collapse")
         isCollapsed = true
         separatorItem.length = maxCollapsedLength()
     }
@@ -118,6 +119,7 @@ final class ControlItemCoordinator {
     func expand() {
         guard let separatorItem else { return }
         guard isCollapsed else { return }
+        Trace.log("control", "expand")
         isCollapsed = false
         separatorItem.length = expandedLength
     }
@@ -272,6 +274,7 @@ final class ControlItemCoordinator {
     /// 그래서 먼저 지우고, 그다음에 원하는 값을 쓰고, 마지막에 새로 만들어야 그 값이 적용된다.
     /// 반대로 하면 우리가 쓴 값이 제거 과정에서 사라진다(실측으로 확인).
     private func recreateSeparator(atPreferredPosition position: Double) {
+        Trace.log("control", "recreateSeparator pos=\(position)")
         let wasCollapsed = isCollapsed
 
         if let separatorItem { NSStatusBar.system.removeStatusItem(separatorItem) }

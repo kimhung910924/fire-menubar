@@ -69,6 +69,7 @@ final class MenuBarLayoutController {
     /// 기획안 21절 — `아이콘 다시 검색`.
     @discardableResult
     func rescan() -> [MenuBarItem] {
+        Trace.log("layout", "rescan")
         scanner.invalidateCaches()
         let scanned = scanner.scan()
         let items = scanned.filter { !$0.isFireControlItem }
@@ -143,6 +144,7 @@ final class MenuBarLayoutController {
     ///
     /// 숨긴 상태에서는 좌표를 믿을 수 없으므로 잠깐 펼치고 계산한 뒤 다시 적용한다.
     func realignSeparator(completion: @escaping () -> Void) {
+        Trace.log("layout", "realignSeparator")
         controlItems.expand()
         scanner.invalidateOwners()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
@@ -272,6 +274,7 @@ final class MenuBarLayoutController {
     /// 반환값은 적용 성공 여부다. 실패해도 예외를 던지지 않고 `recovery.json`에 기록된다.
     @discardableResult
     func applySections() -> Bool {
+        Trace.log("layout", "applySections")
         let store = SettingsStore.shared
         let hiddenIds = Set(store.items(in: .fireBar).map(\.stableId))
         let hasHiddenItems = !hiddenIds.subtracting([ControlItemCoordinator.fireIconStableId]).isEmpty

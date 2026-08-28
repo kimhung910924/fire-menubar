@@ -3,10 +3,22 @@ import ApplicationServices
 
 /// 기획안 9절 — Fire Bar의 아이콘은 이미지가 아니라 원본 메뉴바 항목을 조작하는 프록시다.
 ///
-/// 구현 우선순위를 그대로 따른다.
-/// 1. 접근성 API의 `AXPress`
-/// 2. 원본 아이콘의 실제 좌표 클릭
-/// 3. 필요하면 원본 항목을 임시로 표시한 뒤 클릭하고, 끝나면 다시 숨김
+/// ## 핵심 실측 (2026-08-29)
+///
+/// **메뉴가 붙은 status item의 `AXPress`는 메뉴를 즉시 열지만, 성공을 반환하지 않는다.**
+/// 열린 메뉴의 트래킹이 응답을 막고 있다가 ~1.5초 뒤 `-25204(CannotComplete)`로 끝난다.
+/// 그 시점에 **액션은 이미 전달되어 메뉴가 떠 있다.**
+///
+/// 예전 코드는 이 반환값을 실패로 해석해 좌표 클릭 폴백을 쐈고, 그 합성 클릭이
+/// 방금 연 메뉴를 토글로 닫았다 — 사용자에게는 "메뉴가 1.5초 뒤 저절로 닫힌다"로 보였다.
+/// (Fire를 죽이면 폴백이 안 나가서 메뉴가 살아남는 것까지 실측으로 일치)
+///
+/// 그래서 지금 구조는 **반환값이 아니라 화면 관찰로 성패를 가린다.**
+/// 1. 대상 AX 엘리먼트를 찾는다 (짧은 타임아웃).
+/// 2. `AXPress`를 백그라운드 스레드에서 발사한다. 응답은 기다리지 않는다.
+/// 3. 팝업 메뉴 창이 **새로** 나타나는지 CGWindowList로만 관찰한다 (AX 질의 없음).
+/// 4. 메뉴가 열렸으면 폴백을 쏘지 않고, 그 창들이 닫힐 때까지 기다렸다가 숨김을 복원한다.
+/// 5. 메뉴도 없고 성공 반환도 없을 때만 좌표 클릭으로 넘어간다.
 @MainActor
 final class MenuBarActionProxy {
 
@@ -38,114 +50,111 @@ final class MenuBarActionProxy {
     private func activate(_ item: MenuBarItem, secondary: Bool,
                           completion: @escaping (Result) -> Void) {
         guard AccessibilityPermissionManager.shared.hasPermission else {
-            completion(.failed("손쉬운 사용 권한이 없습니다"))
+            completion(.failed(L10n.t("손쉬운 사용 권한이 없습니다", "Accessibility permission is missing")))
             return
         }
 
-        // 1순위 — 접근성 액션 (좌클릭 AXPress / 우클릭 AXShowMenu).
-        //
-        // 단, **항목이 화면 안에 있을 때만** 쓴다. 숨겨서 화면 왼쪽 밖에 밀어둔 항목에도
-        // AXPress 자체는 성공하지만, 열린 메뉴가 그 항목의 좌표를 따라가 화면 밖에 뜬다.
-        // 성공을 반환하니 호출부는 다음 경로로 넘어가지도 않아서, 사용자에게는
-        // "눌러도 아무 일이 없다"로 보인다. Fire Bar에 있는 항목은 정의상 숨겨져 있으므로
-        // 거의 항상 아래의 "숨김 풀고 누르기" 경로를 탄다.
-        // (2026-08-28 실측: 숨긴 채 누르니 메뉴가 149x176 크기로 x=-1043에 열렸다.)
-        // `frame`만으로는 판단할 수 없다. 창이 없는 항목(windowNumber == 0)은 접근성이
-        // 보고하는 좌표가 실제 위치와 다르다 — 화면이 1470pt인데 x=2643으로 나온다.
-        // 실제 창이 있고 화면 안에 있을 때만 지름길을 쓴다.
-        let hasRealWindowOnScreen = item.windowNumber != 0 && !item.isNotchConcealed
-            && item.frame.minX >= 0
-        if hasRealWindowOnScreen,
-           performViaAccessibility(item, action: secondary ? kAXShowMenuAction : kAXPressAction) {
-            completion(.pressed)
-            return
-        }
+        Trace.log("proxy", "activate \(item.stableId) secondary=\(secondary) notch=\(item.isNotchConcealed) x=\(Int(item.frame.minX))")
 
-        // 2·3순위 — 숨김을 잠시 풀어 원본을 실제 메뉴바에 되돌린 뒤 그 좌표를 클릭한다.
-        // 숨긴 상태에서는 항목이 화면 밖에 있어 좌표 클릭이 성립하지 않기 때문에 순서가 중요하다.
+        // 숨김을 잠시 풀어 원본을 실제 메뉴바에 되돌린다. 숨긴 채 AXPress를 하면
+        // 메뉴가 항목의 화면 밖 좌표를 따라가 화면 밖에 열린다(2026-08-28 실측 x=-1043).
+        // 이미 펼쳐져 있으면 아무 일도 하지 않는 무해한 경로다.
+        let wasCollapsed = controlItems.isCollapsed
         controlItems.withItemsTemporarilyVisible { finish in
-            // 항목이 실제로 화면 안으로 돌아올 때까지 기다린다.
-            //
-            // 예전에는 0.12초를 세고 눌렀다. 그 사이 macOS가 레이아웃을 다시 잡지 못하면
-            // 항목이 아직 숨긴 자리(화면 왼쪽 밖)에 있고, 거기서 AXPress를 하면
-            // **메뉴가 화면 밖에 열린다.** 사용자에게는 "눌러도 아무 일이 없다"로 보인다.
-            // (2026-08-28 실측: HiddenNotch 메뉴가 149x176 크기로 x=-995에 열렸다.)
-            //
-            // 그래서 시간이 아니라 조건을 기다린다.
+            let press: (MenuBarItem) -> Void = { refreshed in
+                self.pressObservingMenu(refreshed, secondary: secondary) { outcome in
+                    switch outcome {
+                    case .menuOpened(let baseline):
+                        // 메뉴가 떠 있는 동안 숨김을 되돌리면 항목이 밀려나며 메뉴가 닫힌다.
+                        // 창이 닫힌 것을 확인한 뒤에만 복원한다.
+                        Trace.log("proxy", "AXPress로 메뉴 열림 — 닫힐 때까지 대기")
+                        Self.waitForNewMenusToClose(baseline: baseline) {
+                            Trace.log("proxy", "메뉴 닫힘 → 숨김 복원")
+                            finish()
+                        }
+                        completion(.pressed)
+
+                    case .actionCompleted:
+                        // 메뉴 없이 동작이 끝났다(자체 창을 여는 앱 등). 잠깐 여유를 두고 복원한다.
+                        Trace.log("proxy", "AXPress 즉시 완료(메뉴 없음)")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { finish() }
+                        completion(.pressed)
+
+                    case .failed:
+                        self.fallBackToSyntheticClick(refreshed, secondary: secondary,
+                                                      finish: finish, completion: completion)
+                    }
+                }
+            }
+
+            // 이미 화면에 있던 항목은 재스캔을 기다릴 이유가 없다. 전체 재스캔은
+            // 접근성 순회 때문에 1초 이상 걸린다(실측 1.2초) — 그만큼 클릭 반응이 늦어진다.
+            if !wasCollapsed, item.frame.minX >= 0 {
+                press(item)
+                return
+            }
+
+            // 항목이 실제로 화면 안으로 돌아올 때까지 조건을 기다린다(시간이 아니라).
             Self.waitUntilOnScreen(item) { refreshed in
                 guard let refreshed else {
                     finish()
-                    completion(.failed("원본 아이콘을 찾지 못했습니다"))
+                    completion(.failed(L10n.t("원본 아이콘을 찾지 못했습니다", "Could not find the original icon")))
                     return
                 }
-
-                // 접근성을 여기서 한 번 더 시도한다.
-                //
-                // 위(1순위)에서 실패한 이유는 앱이 액션을 구현하지 않아서가 아니라
-                // 항목이 화면 밖에 있어 `AXExtrasMenuBar`에 나오지 않았기 때문일 수 있다.
-                // 숨김을 푼 지금은 목록에 잡힌다. 접근성은 노치에 가려졌는지와 무관하므로,
-                // 좌표 클릭이 성립하지 않는 항목도 이 경로로 열린다. (2026-08-28 실측:
-                // 내장 화면 1470pt에서 숨김을 풀면 항목 절반이 노치 뒤로 들어간다.)
-                if self.performViaAccessibility(refreshed, action: secondary ? kAXShowMenuAction : kAXPressAction) {
-                    // 메뉴가 열려 있는 동안 숨김을 되돌리면 메뉴가 닫힌다.
-                    Self.waitForMenuToClose { finish() }
-                    completion(.pressed)
-                    return
-                }
-                // 노치에 가려진 항목은 화면에 없어 일반 좌표 클릭이 성립하지 않는다.
-                // 마지막 시도로 소유 앱 프로세스에 이벤트를 직접 배달해보고,
-                // 실제로 메뉴가 열렸는지 확인한 뒤에만 성공을 보고한다.
-                // (실측: 대부분의 앱은 그려지지 않은 창으로는 이벤트를 받지 못한다.)
-                if refreshed.isNotchConcealed {
-                    guard let pid = self.candidatePids(for: refreshed).first else {
-                        finish()
-                        completion(.failed("\(item.ownerName)의 실행 중인 프로세스를 찾지 못했습니다"))
-                        return
-                    }
-                    Self.synthesizeClick(at: CGPoint(x: refreshed.frame.midX, y: refreshed.frame.midY),
-                                         rightButton: secondary, directToPid: pid)
-                    // 메뉴가 뜨는 데 걸리는 시간은 앱마다 다르다. 0.7초에 한 번만 보면
-                    // 그 뒤에 뜬 메뉴를 놓치고 실패로 처리해, 숨김을 되돌리며 방금 뜬 메뉴를
-                    // 닫아버린다. 사용자에게는 메뉴가 잠깐 번쩍이고 사라지는 걸로 보인다.
-                    // (2026-08-28 실측) 그래서 시간이 아니라 조건을 기다린다.
-                    Self.waitForMenuToOpen { opened in
-                        if opened {
-                            Self.waitForMenuToClose { finish() }
-                            completion(.clicked)
-                        } else {
-                            finish()
-                            completion(.failed("\(item.ownerName)이(가) 노치에 가려져 있어 클릭을 전달하지 못했습니다"))
-                        }
-                    }
-                    return
-                }
-                Self.synthesizeClick(at: CGPoint(x: refreshed.frame.midX, y: refreshed.frame.midY),
-                                     rightButton: secondary)
-                // 메뉴가 열려 있는 동안은 숨김을 복원하지 않는다. 복원하면 메뉴가 닫혀버린다.
-                Self.waitForMenuToClose {
-                    finish()
-                }
-                completion(.clicked)
+                Trace.log("proxy", "화면 복귀 확인 x=\(Int(refreshed.frame.minX)) notch=\(refreshed.isNotchConcealed) win=\(refreshed.windowNumber)")
+                press(refreshed)
             }
         }
     }
 
-    /// 숨김을 푼 뒤 항목이 화면 안으로 돌아올 때까지 기다린다.
-    ///
-    /// 노치에 가려진 자리(x가 노치 구간)는 화면 안으로 친다 — 항목 자체는 안 보여도
-    /// 거기서 연 메뉴는 노치 아래로 펼쳐져 보이기 때문이다. 화면 왼쪽 밖(x<0)만 기다린다.
-    private static func waitUntilOnScreen(_ item: MenuBarItem, timeout: TimeInterval = 1.5,
-                                          _ completion: @escaping (MenuBarItem?) -> Void) {
-        let deadline = Date().addingTimeInterval(timeout)
+    // MARK: 1순위 — 접근성 액션 + 화면 관찰
 
+    private enum PressOutcome {
+        /// 새 팝업 메뉴 창이 나타났다. 연관값은 누르기 **전**에 있던 팝업 창 목록.
+        case menuOpened(baseline: Set<CGWindowID>)
+        /// 액션이 성공을 반환했고 메뉴 창은 없다.
+        case actionCompleted
+        case failed
+    }
+
+    /// `AXPress`를 백그라운드에서 발사하고, 팝업 메뉴 창이 새로 나타나는지 관찰한다.
+    ///
+    /// 관찰에는 AX 질의를 쓰지 않는다. 열린 메뉴의 소유 앱에 AX 질의를 보내는 것은
+    /// 트래킹 중인 메인 스레드와 얽히는 위험만 있고 얻는 게 없다.
+    private func pressObservingMenu(_ item: MenuBarItem, secondary: Bool,
+                                    _ completion: @escaping (PressOutcome) -> Void) {
+        guard let target = resolveAxTarget(for: item) else {
+            Trace.log("ax", "대상 엘리먼트를 찾지 못함")
+            completion(.failed)
+            return
+        }
+
+        let action = secondary ? kAXShowMenuAction : kAXPressAction
+        let baseline = Self.popUpMenuWindowNumbers()
+
+        // 발사. 메뉴가 붙은 항목은 응답이 안 오는 것이 정상이므로 반환을 기다리지 않는다.
+        let resultBox = AxResultBox()
+        let element = target
+        DispatchQueue.global(qos: .userInitiated).async {
+            let err = AXUIElementPerformAction(element, action as CFString)
+            resultBox.store(err)
+            DispatchQueue.main.async { Trace.log("ax", "press 반환 err=\(err.rawValue)") }
+        }
+
+        // 관찰. 메뉴는 대개 0.1초 안에 뜬다. 앱이 느릴 수 있어 1.5초까지 본다.
+        let deadline = Date().addingTimeInterval(1.5)
         func poll() {
-            let refreshed = refreshedItem(for: item)
-            if let refreshed, refreshed.frame.minX >= 0 {
-                completion(refreshed)
+            let now = Self.popUpMenuWindowNumbers()
+            if !now.subtracting(baseline).isEmpty {
+                completion(.menuOpened(baseline: baseline))
+                return
+            }
+            if let err = resultBox.load(), err == .success {
+                completion(.actionCompleted)
                 return
             }
             if Date() > deadline {
-                completion(refreshed)   // 끝내 안 돌아오면 있는 그대로 넘긴다
+                completion(resultBox.load() == .success ? .actionCompleted : .failed)
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
@@ -153,18 +162,23 @@ final class MenuBarActionProxy {
         poll()
     }
 
-    // MARK: 1순위 — 접근성 액션
+    /// 백그라운드 스레드의 AX 반환값을 메인에서 읽기 위한 상자.
+    private final class AxResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: AXError?
+        func store(_ error: AXError) { lock.lock(); value = error; lock.unlock() }
+        func load() -> AXError? { lock.lock(); defer { lock.unlock() }; return value }
+    }
 
-    /// 소유 앱의 `AXExtrasMenuBar` 아래에서 해당 항목을 찾아 지정한 액션을 수행한다.
+    /// 소유 앱의 `AXExtrasMenuBar` 아래에서 해당 항목의 엘리먼트를 찾는다.
     ///
     /// `item.pid`를 그대로 쓰지 않는다. macOS 26에서 status item 윈도우의 소유 PID는
     /// 전부 제어 센터를 가리키므로, 번들 식별자로 실제 앱을 다시 찾아야 한다.
-    ///
-    /// 제어 센터가 소유한 항목이나 해당 액션을 구현하지 않은 앱에서는 실패한다.
-    /// 실패는 예외가 아니라 정상 경로이며, 호출부가 좌표 클릭으로 넘어간다.
-    private func performViaAccessibility(_ item: MenuBarItem, action: String) -> Bool {
+    private func resolveAxTarget(for item: MenuBarItem) -> AXUIElement? {
         for pid in candidatePids(for: item) {
             let app = AXUIElementCreateApplication(pid)
+            // 기본 타임아웃 6초. 응답 없는 앱 하나가 클릭 반응을 수 초씩 늦춘다.
+            AXUIElementSetMessagingTimeout(app, 0.5)
 
             var extras: CFTypeRef?
             guard AXUIElementCopyAttributeValue(app, kAXExtrasMenuBarAttribute as CFString, &extras) == .success,
@@ -178,21 +192,9 @@ final class MenuBarActionProxy {
 
             // 항목이 여러 개면 화면 위치가 가장 가까운 것을 고른다.
             let target = items.count == 1 ? items.first : bestMatch(in: items, for: item)
-            guard let target else { continue }
-
-            if AXUIElementPerformAction(target, action as CFString) == .success {
-                // 메뉴를 연 앱을 앞으로 가져온다.
-                //
-                // AXPress는 메뉴를 열기만 하고 앱을 활성화하지는 않는다. 활성 앱이 아니면
-                // macOS가 1~2초 뒤 메뉴를 스스로 거둬간다. 사용자에게는 메뉴가 잠깐
-                // 떴다가 저절로 닫히는 걸로 보인다. (2026-08-28 실측: 0.2초에 열려
-                // 1.8초에 사라졌고, 그동안 Fire는 아무것도 하지 않았다.)
-                NSRunningApplication(processIdentifier: pid)?
-                    .activate(options: [.activateIgnoringOtherApps])
-                return true
-            }
+            if let target { return target }
         }
-        return false
+        return nil
     }
 
     /// 번들 식별자로 찾은 실제 앱을 먼저 시도하고, 없으면 창이 보고한 PID를 시도한다.
@@ -211,6 +213,8 @@ final class MenuBarActionProxy {
         for element in elements {
             guard let frame = MenuBarScanner.axFrame(of: element) else { continue }
             let distance = abs(frame.midX - item.frame.midX)
+            // 이웃 항목으로 튀지 않게 상한을 둔다. 메뉴바 항목 간격은 30px 이상이다.
+            guard distance <= 20 else { continue }
             if best == nil || distance < best!.distance {
                 best = (element, distance)
             }
@@ -218,7 +222,80 @@ final class MenuBarActionProxy {
         return best?.element
     }
 
-    // MARK: 2순위 — 좌표 클릭
+    // MARK: 2순위 — 좌표 클릭 폴백
+
+    /// 접근성이 통하지 않는 항목만 온다. 그려진 항목은 실제 클릭을 합성하면
+    /// 정상 트래킹으로 메뉴가 열리고, 바깥 클릭으로 닫히는 표준 동작을 얻는다.
+    private func fallBackToSyntheticClick(_ item: MenuBarItem, secondary: Bool,
+                                          finish: @escaping () -> Void,
+                                          completion: @escaping (Result) -> Void) {
+        // 노치에 가려진 항목은 화면에 없어 일반 좌표 클릭이 성립하지 않는다.
+        // 소유 앱 프로세스에 이벤트를 직접 배달해보고, 메뉴가 열렸는지 확인한다.
+        //
+        // 한계(2026-08-29 실측): 이렇게 열린 메뉴는 합성 이벤트 트래킹이라
+        // macOS가 ~0.27초 뒤 거둬간다. 접근성이 막힌 앱에만 쓰는 최후 수단이다.
+        if item.isNotchConcealed {
+            guard let pid = candidatePids(for: item).first else {
+                finish()
+                completion(.failed(L10n.t("\(item.ownerName)의 실행 중인 프로세스를 찾지 못했습니다",
+                                          "Could not find a running process for \(item.ownerName)")))
+                return
+            }
+            Trace.log("proxy", "노치 경로 — postToPid 클릭 합성 pid=\(pid)")
+            let baseline = Self.popUpMenuWindowNumbers()
+            Self.synthesizeClick(at: CGPoint(x: item.frame.midX, y: item.frame.midY),
+                                 rightButton: secondary, directToPid: pid)
+            Self.waitForNewMenu(baseline: baseline) { opened in
+                if opened {
+                    Self.waitForNewMenusToClose(baseline: baseline) { finish() }
+                    completion(.clicked)
+                } else {
+                    finish()
+                    completion(.failed(L10n.t("\(item.ownerName)이(가) 노치에 가려져 있어 클릭을 전달하지 못했습니다",
+                                              "\(item.ownerName) is concealed by the notch, so the click could not be delivered")))
+                }
+            }
+            return
+        }
+
+        Trace.log("proxy", "좌표 클릭 합성 x=\(Int(item.frame.midX))")
+        let baseline = Self.popUpMenuWindowNumbers()
+        Self.synthesizeClick(at: CGPoint(x: item.frame.midX, y: item.frame.midY),
+                             rightButton: secondary)
+        // 메뉴가 열려 있는 동안은 숨김을 복원하지 않는다. 복원하면 메뉴가 닫혀버린다.
+        Self.waitForNewMenusToClose(baseline: baseline) {
+            Trace.log("proxy", "메뉴 닫힘 → 숨김 복원")
+            finish()
+        }
+        completion(.clicked)
+    }
+
+    /// 숨김을 푼 뒤 항목이 화면 안으로 돌아올 때까지 기다린다.
+    ///
+    /// 노치에 가려진 자리(x가 노치 구간)는 화면 안으로 친다 — 항목 자체는 안 보여도
+    /// 거기서 연 메뉴는 노치 아래로 펼쳐져 보이기 때문이다. 화면 왼쪽 밖(x<0)만 기다린다.
+    ///
+    /// 시간 상한은 스캔 비용 기준이다. 한 번의 재스캔이 접근성 순회 때문에 1.2초쯤
+    /// 걸리므로, 1.5초로 두면 재배치 도중의 스캔 한 번이 빗나가는 것만으로 실패한다
+    /// (2026-08-29 실측 — 방금 재시작한 앱의 항목을 못 찾았다). 서너 번은 볼 수 있게 잡는다.
+    private static func waitUntilOnScreen(_ item: MenuBarItem, timeout: TimeInterval = 5,
+                                          _ completion: @escaping (MenuBarItem?) -> Void) {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        func poll() {
+            let refreshed = refreshedItem(for: item)
+            if let refreshed, refreshed.frame.minX >= 0 {
+                completion(refreshed)
+                return
+            }
+            if Date() > deadline {
+                completion(refreshed)   // 끝내 안 돌아오면 있는 그대로 넘긴다
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
+        }
+        poll()
+    }
 
     /// 숨김을 푼 직후의 실제 상태를 다시 읽는다. 스캔 당시 좌표는 이미 낡았다.
     private static func refreshedItem(for item: MenuBarItem) -> MenuBarItem? {
@@ -250,46 +327,75 @@ final class MenuBarActionProxy {
         }
     }
 
-    /// 메뉴가 열릴 때까지 기다린다. 열리면 `true`, 시간 안에 안 열리면 `false`.
-    private static func waitForMenuToOpen(timeout: TimeInterval = 2.5,
-                                          _ completion: @escaping (Bool) -> Void) {
+    // MARK: 메뉴 창 관찰 (CGWindowList만 사용)
+
+    /// 기준선에 없던 팝업 메뉴 창이 나타날 때까지 기다린다.
+    private static func waitForNewMenu(baseline: Set<CGWindowID>, timeout: TimeInterval = 2.5,
+                                       _ completion: @escaping (Bool) -> Void) {
         let deadline = Date().addingTimeInterval(timeout)
 
         func poll() {
-            if isSystemMenuOpen() { completion(true); return }
+            if !popUpMenuWindowNumbers().subtracting(baseline).isEmpty { completion(true); return }
             if Date() > deadline { completion(false); return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() }
     }
 
-    /// 메뉴가 닫힐 때까지 기다린다. 열린 메뉴가 있으면 시스템 전역에 `AXMenu` 창이 떠 있다.
+    /// 누르기로 생긴 팝업 메뉴 창들이 전부 닫힐 때까지 기다린다.
+    ///
     /// 최대 대기 시간을 두어 감지에 실패해도 영원히 숨김이 풀린 채로 남지 않게 한다.
-    private static func waitForMenuToClose(timeout: TimeInterval = 20, _ completion: @escaping () -> Void) {
+    /// 서브메뉴가 창을 추가로 만들 수 있으므로 "기준선에 없던 창이 0이 될 때"를 본다.
+    private static func waitForNewMenusToClose(baseline: Set<CGWindowID>,
+                                               timeout: TimeInterval = 60,
+                                               _ completion: @escaping () -> Void) {
         let deadline = Date().addingTimeInterval(timeout)
         var sawMenu = false
 
         func poll() {
-            let menuOpen = isSystemMenuOpen()
-            if menuOpen { sawMenu = true }
-            if (sawMenu && !menuOpen) || Date() > deadline {
+            let open = !popUpMenuWindowNumbers().subtracting(baseline).isEmpty
+            if open { sawMenu = true }
+            if (sawMenu && !open) || Date() > deadline {
                 completion()
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { poll() }
         }
         // 메뉴가 뜰 시간을 조금 준 뒤 감시를 시작한다.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { poll() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { poll() }
     }
 
-    /// 기획안 8절 — "Fire Bar 아이콘으로 연 메뉴가 열려 있으면 자동으로 닫지 않는다"의 판정에도 쓰인다.
+    /// 지금 떠 있는 팝업 메뉴 레벨 창의 번호들.
+    private static func popUpMenuWindowNumbers() -> Set<CGWindowID> {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+
+        let popUpLayer = Int(CGWindowLevelForKey(.popUpMenuWindow))
+        var numbers = Set<CGWindowID>()
+        for window in windows {
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer == popUpLayer,
+                  let number = window[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = window[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                  // 1픽셀짜리 보조 창은 메뉴가 아니다.
+                  frame.width > 20, frame.height > 20
+            else { continue }
+            numbers.insert(number)
+        }
+        return numbers
+    }
+
+    // MARK: 열린 메뉴 판정 (Fire Bar 자동 닫기 등 외부에서 사용)
+
+    /// 기획안 8절 — "Fire Bar 아이콘으로 연 메뉴가 열려 있으면 자동으로 닫지 않는다"의 판정에 쓰인다.
     ///
     /// 예전에는 팝업 레벨 **이상**의 창이 하나라도 있으면 메뉴가 열린 것으로 봤다.
     /// 그 위에는 커서·화면 기록 표시기 등 상시로 떠 있는 창이 있어서,
     /// 빈 영역 클릭이 통째로 막히는 일이 생겼다. 그래서 두 가지를 정확히 본다.
     static func isSystemMenuOpen() -> Bool {
         if frontmostMenuBarHasOpenMenu() { return true }
-        return hasPopUpMenuWindow()
+        return !popUpMenuWindowNumbers().isEmpty
     }
 
     /// 메뉴바 메뉴가 펼쳐져 있으면 해당 메뉴 항목이 선택 상태가 된다.
@@ -319,22 +425,5 @@ final class MenuBarActionProxy {
             }
         }
         return false
-    }
-
-    /// 정확히 팝업 메뉴 레벨에 있는 창만 본다. 그 위 레벨은 메뉴가 아니다.
-    private static func hasPopUpMenuWindow() -> Bool {
-        guard let windows = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else { return false }
-
-        let popUpLayer = Int(CGWindowLevelForKey(.popUpMenuWindow))
-        return windows.contains { window in
-            guard let layer = window[kCGWindowLayer as String] as? Int, layer == popUpLayer,
-                  let boundsDict = window[kCGWindowBounds as String] as? [String: Any],
-                  let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
-            else { return false }
-            // 1픽셀짜리 보조 창은 메뉴가 아니다.
-            return frame.width > 20 && frame.height > 20
-        }
     }
 }

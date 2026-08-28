@@ -308,6 +308,58 @@ enum Diagnostics {
             }
         }
 
+        // 실제 좌표 클릭 합성 — "메뉴가 바깥 클릭으로 닫히는가" 검증용. object = "x,y" (CG 좌표).
+        // 열린 메뉴가 있으면 그 클릭은 메뉴 트래킹이 삼키므로 아래 앱에는 전달되지 않는다.
+        center.addObserver(
+            forName: .init("com.rrllab.FireMenuBar.diag.clickAt"), object: nil, queue: .main
+        ) { note in
+            MainActor.assumeIsolated {
+                let parts = (note.object as? String ?? "").split(separator: ",")
+                guard parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]) else {
+                    writeDiagResult("clickAt: 좌표 형식 오류")
+                    return
+                }
+                let point = CGPoint(x: x, y: y)
+                let source = CGEventSource(stateID: .combinedSessionState)
+                let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                                   mouseCursorPosition: point, mouseButton: .left)
+                let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                                 mouseCursorPosition: point, mouseButton: .left)
+                down?.post(tap: .cghidEventTap)
+                up?.post(tap: .cghidEventTap)
+                writeDiagResult("clickAt(\(Int(x)),\(Int(y))): 전송")
+            }
+        }
+
+        // 시각이 찍힌 계측 실행 — HANDOFF 0절의 "다음 단계".
+        //
+        // 헬퍼 프로세스의 포커스 오염을 피하려고, 누르기와 메뉴 수명 관찰을
+        // Fire 프로세스 안에서 한 번에 한다. 결과는 trace.txt.
+        center.addObserver(
+            forName: .init("com.rrllab.FireMenuBar.diag.pressTrace"), object: nil, queue: .main
+        ) { note in
+            MainActor.assumeIsolated {
+                guard let raw = note.object as? String else {
+                    writeDiagResult("pressTrace: stableId 없음")
+                    return
+                }
+                let id = raw.split(separator: "|").map(String.init)[0]
+                guard let item = layout.item(withId: id) ?? layout.lastKnownItems[id] else {
+                    writeDiagResult("pressTrace(\(id)): 항목을 찾지 못함")
+                    return
+                }
+                Trace.begin("pressTrace \(id)")
+                startMenuLifecycleWatch(duration: 10)
+                startActivationWatch(duration: 10)
+                proxy.activate(item) { result in
+                    MainActor.assumeIsolated {
+                        Trace.log("proxy", "completion=\(result)")
+                        writeDiagResult("pressTrace(\(id)): \(result)")
+                    }
+                }
+            }
+        }
+
         for (name, secondary) in [("press", false), ("pressRight", true)] {
             center.addObserver(
                 forName: .init("com.rrllab.FireMenuBar.diag.\(name)"), object: nil, queue: .main
@@ -331,6 +383,90 @@ enum Diagnostics {
                     }
                 }
             }
+        }
+    }
+
+    /// 팝업 메뉴 레벨(101) 창의 등장·프레임 변화·소멸을 0.05초 간격으로 기록한다.
+    private static func startMenuLifecycleWatch(duration: TimeInterval) {
+        let deadline = Date().addingTimeInterval(duration)
+        var lastSeen: [CGWindowID: CGRect] = [:]
+
+        func poll() {
+            guard Date() < deadline else {
+                Trace.log("menuWatch", "관찰 종료")
+                Trace.end()
+                return
+            }
+            let popUpLayer = Int(CGWindowLevelForKey(.popUpMenuWindow))
+            let windows = (CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]]) ?? []
+
+            // status item 행의 재배치도 함께 본다. 메뉴 소멸이 Fire의 어떤 코드와도
+            // 겹치지 않는다면, macOS 쪽 재배치(오버플로 정리)가 범인일 수 있다.
+            let statusLayer = Int(CGWindowLevelForKey(.statusWindow))
+            var statusCount = 0
+            var statusMinX = CGFloat.greatestFiniteMagnitude
+
+            var current: [CGWindowID: CGRect] = [:]
+            for window in windows {
+                guard let layer = window[kCGWindowLayer as String] as? Int,
+                      let boundsDict = window[kCGWindowBounds as String] as? [String: Any],
+                      let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+                else { continue }
+                if layer == statusLayer, frame.height <= 40, frame.width <= 400 {
+                    statusCount += 1
+                    statusMinX = min(statusMinX, frame.minX)
+                }
+                guard layer == popUpLayer,
+                      let number = window[kCGWindowNumber as String] as? CGWindowID,
+                      frame.width > 20, frame.height > 20
+                else { continue }
+                current[number] = frame
+                if lastSeen[number] == nil {
+                    let pid = window[kCGWindowOwnerPID as String] as? pid_t ?? 0
+                    let owner = pid != 0
+                        ? (NSRunningApplication(processIdentifier: pid)?.localizedName ?? "\(pid)")
+                        : "?"
+                    Trace.log("menuWatch", "메뉴 등장 #\(number) owner=\(owner) frame=\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))")
+                } else if lastSeen[number] != frame {
+                    Trace.log("menuWatch", "메뉴 이동 #\(number) → \(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))")
+                }
+            }
+            for (number, _) in lastSeen where current[number] == nil {
+                Trace.log("menuWatch", "메뉴 소멸 #\(number)")
+            }
+            lastSeen = current
+
+            let rowSignature = "\(statusCount)@\(statusMinX == .greatestFiniteMagnitude ? -1 : Int(statusMinX))"
+            if rowSignature != lastRowSignature {
+                Trace.log("statusRow", "항목 \(rowSignature) (개수@최좌단x)")
+                lastRowSignature = rowSignature
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
+        }
+        poll()
+    }
+
+    /// 직전 폴에서 본 status item 행의 서명. 바뀔 때만 기록한다.
+    private static var lastRowSignature = ""
+
+    /// 어떤 앱이 활성화·비활성화되는지 기록한다. 메뉴 소멸 시점과의 상관을 보기 위한 것.
+    private static func startActivationWatch(duration: TimeInterval) {
+        var observers: [NSObjectProtocol] = []
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didActivateApplicationNotification,
+                     NSWorkspace.didDeactivateApplicationNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { note in
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let kind = name == NSWorkspace.didActivateApplicationNotification ? "활성" : "비활성"
+                MainActor.assumeIsolated {
+                    Trace.log("appWatch", "\(kind): \(app?.localizedName ?? "?") (\(app?.bundleIdentifier ?? "-"))")
+                }
+            })
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            observers.forEach { center.removeObserver($0) }
         }
     }
 

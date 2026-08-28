@@ -39,6 +39,7 @@ final class GlobalClickMonitor {
 
     private func handle(_ event: NSEvent) {
         let point = NSEvent.mouseLocation
+        Trace.log("click", String(format: "전역 mouseDown 관찰 (%.0f,%.0f)", point.x, point.y))
         // 진단: 이벤트 자신의 좌표와 핸들러 시점 커서 좌표를 나란히 본다.
         let evt = event.locationInWindow
         let rejection = EmptyMenuBarHitTester.reject(point)
