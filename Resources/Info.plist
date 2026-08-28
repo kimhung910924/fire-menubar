@@ -15,23 +15,19 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.1</string>
+	<string>0.1.2</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
-	<!-- 기획안 4절 — Dock 아이콘 없음, 앱 전환 목록에 나타나지 않는 accessory 앱 -->
 	<key>LSUIElement</key>
 	<true/>
-	<!-- 기획안 13절 — 권한 사용 목적. 화면 데이터는 저장하거나 전송하지 않는다. -->
 	<key>NSAccessibilityUsageDescription</key>
 	<string>메뉴바 아이콘을 탐색하고 Fire Bar에서 클릭을 전달하기 위해 필요합니다.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Fire Bar와 설정 화면에 실제 메뉴바 아이콘 모양을 표시하기 위해서만 사용합니다. 화면 내용을 저장하거나 전송하지 않습니다.</string>
-	<!-- Sparkle 자동 업데이트. 피드는 GitHub이 아니라 자기 도메인에 둔다 — 이 주소는
-	     배포된 앱 안에 영구히 박히고, 이미 깔린 앱이 몇 년 뒤에도 계속 두드린다. -->
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
