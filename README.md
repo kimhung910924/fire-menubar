@@ -1,248 +1,278 @@
 # Fire
 
-macOS 메뉴바 아이콘을 **메인 메뉴바**와 **Fire Bar** 두 구역으로 정리하는 초경량 메뉴바 앱.
+*[한국어](README.ko.md)*
 
-아이콘이 많아 메뉴바가 넘치면 필요할 때만 꺼내 쓰도록 접어둔다.
-앱 1.3MB, 상주 메모리 74MB. Dock 아이콘 없이 메뉴바에만 산다.
+A tiny macOS menu bar app that sorts menu bar icons into two zones: the **main menu bar**
+and the **Fire Bar**.
 
-## 다운로드
+When there are too many icons for the bar to hold, the ones you rarely need get folded away
+and come back only when you ask for them.
 
-**[Fire 0.1.0 내려받기 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
+1.3 MB on disk, 74 MB resident. No Dock icon — it lives in the menu bar only.
 
-- macOS 14 Sonoma 이상
-- Apple 공증을 마쳤다. 경고 없이 열린다
-- dmg를 열고 Fire를 `응용 프로그램`으로 끌어다 놓는다
+## Download
 
-처음 실행하면 **손쉬운 사용**과 **화면 기록** 권한을 요청한다.
-메뉴바 아이콘을 옮기고 모양을 읽는 데 쓴다. 화면 내용은 저장하거나 전송하지 않는다.
+**[Get Fire 0.1.0 (dmg)](https://github.com/kimhung910924/fire-menubar/releases/latest)**
 
-## 문의
+- macOS 14 Sonoma or later
+- Notarized by Apple, so it opens without a Gatekeeper warning
+- Open the dmg and drag Fire to `Applications`
+
+On first launch it asks for **Accessibility** and **Screen Recording**. They are used to
+move menu bar icons and to read what they look like. Screen contents are never stored or
+transmitted.
+
+## Contact
 
 [rrllab.com](https://rrllab.com) · contact@rrllab.com
 
 ---
 
-기획안: [Fire_맥_메뉴바_앱_기획안.md](Fire_맥_메뉴바_앱_기획안.md)
+## First-time setup
 
-## 빌드와 실행
+1. Launch the app. The settings window opens.
+2. Grant **Accessibility** — System Settings › Privacy & Security › Accessibility
+3. Grant **Screen Recording** — System Settings › Privacy & Security › Screen Recording
+4. Relaunch Fire after granting them.
+5. In settings, drag the icons you want folded away into the `Show in Fire Bar` zone. Fire
+   positions the separator itself.
+6. If any icon is marked orange, hold `⌘` and drag **that icon itself** in the menu bar to
+   fix its order. See "OS constraints" below for why.
+
+## Controls
+
+| Action | How |
+|---|---|
+| Open / close the Fire Bar | Click empty menu bar space, or `⌥⌘F` |
+| Open settings | Click the flame icon, or `⌥⌘,` |
+| Close the Fire Bar | Click outside / `Esc` / 5 seconds idle |
+
+## Build and run
 
 ```bash
 ./build.sh release
 ```
 
-`build/Fire.app`이 만들어진다. 실행:
+That produces `.build/app/Fire.app`:
 
 ```bash
-open build/Fire.app
+open .build/app/Fire.app
 ```
 
-탐색 결과만 확인하는 진단 모드 (GUI를 띄우지 않는다):
+Diagnostic mode, which only reports what the scan found and never shows a GUI:
 
 ```bash
-./build/Fire.app/Contents/MacOS/Fire --dump
+./.build/app/Fire.app/Contents/MacOS/Fire --dump
 ```
 
-### 배포본 만들기
+### Ship a release
 
 ```bash
-./scripts/release.sh            # Developer ID 서명·공증·dmg
-./scripts/release.sh --publish  # GitHub 릴리즈 업로드까지
+./scripts/release.sh            # Developer ID signing, notarization, dmg
+./scripts/release.sh --publish  # and upload to GitHub Releases
 ```
 
-## 최초 설정
+## OS constraints — read this
 
-1. 앱을 실행하면 설정창이 뜬다.
-2. **손쉬운 사용** 권한을 켠다. → 시스템 설정 › 개인정보 보호 및 보안 › 손쉬운 사용
-3. **화면 기록** 권한을 켠다. → 시스템 설정 › 개인정보 보호 및 보안 › 화면 기록
-4. 권한을 켠 뒤 Fire를 다시 실행한다.
-5. 설정창에서 숨기고 싶은 아이콘을 `Fire Bar에 표시` 구역으로 끌어다 놓는다.
-   구분자 위치는 Fire가 자동으로 맞춘다.
-6. 주황색으로 표시된 아이콘이 있으면, 메뉴바에서 `⌘` 키를 누른 채 **그 아이콘 자체를** 옮겨
-   순서를 맞춘다. (아래 "OS 제약" 참고)
+Everything below was measured on macOS 26 while building the app.
 
-## 조작
+### 1. You cannot hide or reorder another app's status item
 
-| 동작 | 방법 |
-|---|---|
-| Fire Bar 열기/닫기 | 메뉴바 빈 공간 클릭, 또는 `⌥⌘F` |
-| 설정 열기 | 메뉴바의 불꽃 아이콘 클릭, 또는 `⌥⌘,` |
-| Fire Bar 닫기 | 바깥 클릭 / `Esc` / 5초 무동작 |
+No public API does that. The one technique every menu bar organizer uses, Ice and Bartender
+included, is to **own a status item (the separator) and stretch its width to the width of
+the screen**, pushing everything to its left off the display. Fire does the same
+([ControlItemCoordinator.swift](Sources/Fire/StatusItem/ControlItemCoordinator.swift)).
 
-## OS 제약 — 반드시 읽을 것
+The consequence: **hiding only works on a contiguous run of the menu bar**, because
+everything to the left of the separator goes at once.
 
-기획안 24절 "Private API 가능성"에 해당하는 부분이다. 구현하면서 macOS 26에서 실측으로 확인한 내용이다.
+### Fire moves the separator itself
 
-### 1. 다른 앱의 status item을 직접 숨기거나 재배치할 수 없다
-
-공개 API에는 그런 수단이 없다. Ice·Bartender를 포함해 모든 메뉴바 정리 앱이 쓰는 유일한 방법은
-**자기 소유의 status item(구분자) 폭을 화면 너비만큼 늘려서 그 왼쪽 항목을 화면 밖으로 밀어내는 것**이다.
-Fire도 같은 방식을 쓴다 ([ControlItemCoordinator.swift](Sources/Fire/StatusItem/ControlItemCoordinator.swift)).
-
-결과적으로 **숨김은 메뉴바에서 연속된 구간에만 걸 수 있다.** 구분자 왼쪽 전체가 숨겨지기 때문이다.
-
-### 구분자는 Fire가 스스로 옮긴다
-
-macOS는 status item의 위치를 **그 앱 자신의** 사용자 기본값에 저장한다.
+macOS stores a status item's position in **that app's own** user defaults.
 
 ```
-키:  NSStatusItem Preferred Position <autosaveName>
-값:  메뉴바가 있는 화면의 오른쪽 끝에서 그 항목까지의 거리(pt)
+key:    NSStatusItem Preferred Position <autosaveName>
+value:  distance in pt from the right edge of the screen holding the menu bar
 ```
 
-남의 항목은 그 앱의 기본값이라 손댈 수 없지만, **Fire 자신의 구분자는 옮길 수 있다.**
-그래서 사용자가 구분자를 손으로 끌 필요가 없다. 분류를 바꾸면 Fire가 경계를 다시 계산해 맞춘다.
+Another app's item belongs to that app's defaults and is untouchable, but **Fire's own
+separator is not**. So you never drag the separator by hand — change the classification and
+Fire recomputes the boundary.
 
-값과 실제 배치의 관계는 실측으로 확정했다. 구분자는 `(화면 오른쪽 − 값)` 좌표를
-**품은 항목의 바로 왼쪽**에 끼어든다.
+The relationship between the stored value and the resulting placement was pinned down by
+measurement. The separator inserts itself **immediately to the left of whichever item
+contains** the coordinate `(screen right − value)`.
 
 ```
-값 458 → 3390-458 = 2932  (Owly와 pizzaClip의 경계) → Owly 왼쪽에 삽입  (Owly 안 숨겨짐)
-값 445 → 3390-445 = 2945  (pizzaClip 안쪽)          → pizzaClip 왼쪽에 삽입 (Owly 숨겨짐)
-값 420 → 3390-420 = 2970  (TextInput 안쪽)          → pizzaClip까지 숨겨짐
+value 458 → 3390-458 = 2932  (boundary between Owly and pizzaClip) → inserts left of Owly      (Owly not hidden)
+value 445 → 3390-445 = 2945  (inside pizzaClip)                    → inserts left of pizzaClip (Owly hidden)
+value 420 → 3390-420 = 2970  (inside TextInput)                    → hides through pizzaClip
 ```
 
-그래서 항목 **경계**가 아니라 남길 첫 항목의 **한가운데**를 노려야 한다. 경계를 노리면
-어느 쪽에 붙을지 갈려 한 칸씩 어긋난다.
+So you aim at the **middle** of the first item you want to keep, not at the boundary between
+items. Aiming at a boundary is a coin flip over which side it lands on, and it comes out one
+slot off.
 
-주의할 점 하나 더 — status item을 제거하면 macOS가 저장된 위치 값을 **지운다**.
-그래서 `제거 → 값 기록 → 재생성` 순서를 지켜야 한다. 반대로 하면 기록한 값이 사라진다.
+One more trap: removing a status item makes macOS **erase** the stored position. The order
+has to be `remove → record the value → recreate`. Doing it the other way around loses the
+value you just recorded.
 
-### 그래도 남는 한계
+### What is still not fixable
 
-분류가 메뉴바의 연속 구간과 다르면 어긋난다. 아이콘의 물리적 순서는 Fire가 바꿀 수 없기 때문이다.
+If the classification does not line up with a contiguous run of the menu bar, it cannot be
+satisfied, because Fire cannot change the physical order of anyone else's icon.
 
-- FIRE_BAR로 지정했는데 경계 오른쪽이라 안 숨겨진 항목
-- MAIN으로 지정했는데 경계 왼쪽이라 같이 숨겨진 항목
+- an item marked FIRE_BAR that sits right of the boundary, so it stays visible
+- an item marked MAIN that sits left of the boundary, so it gets hidden along with the rest
 
-둘 다 설정 화면에 주황색으로 표시한다. 해결하려면 사용자가 메뉴바에서 `⌘`+드래그로
-**아이콘 자체의 순서**를 바꿔야 한다.
+Both are flagged orange in settings. The fix is for you to `⌘`-drag **the icon itself** in
+the menu bar.
 
-### 설정 화면은 실제 메뉴바 순서로 보여준다
+### Settings shows the real menu bar order
 
-저장된 `order`는 사용자가 드래그로 정한 희망 순서일 뿐이다.
-실제로 무엇이 숨겨지는지는 물리적 위치가 결정하므로, 희망 순서를 보여주면
-눈앞의 메뉴바와 어긋나 보여 혼란만 준다. 그래서 목록은 항상 실측한 물리적 순서로 정렬한다.
+The saved `order` is only the order you wanted when you dragged things around. What actually
+gets hidden is decided by physical position, so showing the wished-for order would disagree
+with the menu bar in front of you. The list is always sorted by the measured physical order.
 
-메커니즘 자체는 실측으로 검증했다:
+The mechanism itself is verified by measurement:
 
 ```bash
-./build/Fire.app/Contents/MacOS/Fire --verify-hide   # 또는 open -n build/Fire.app --args --verify-hide
+./.build/app/Fire.app/Contents/MacOS/Fire --verify-hide
+# or: open -n .build/app/Fire.app --args --verify-hide
 ```
 
 ```
-구분자 확장 전 : 18개
-구분자 확장 후 : 16개
-숨겨진 항목    : 2개
-복원 후        : 18개 (정상 복원)
+before separator expands : 18 items
+after separator expands  : 16 items
+hidden                   : 2 items
+after restore            : 18 items (restored cleanly)
 ```
 
-새 status item은 항상 메뉴바의 가장 왼쪽에 생기므로, 갓 설치한 직후에는 구분자 왼쪽에 아무것도 없다.
-구분자를 오른쪽으로 옮겨야 숨길 대상이 생긴다.
+A new status item always appears at the far left of the menu bar, so right after install
+there is nothing to the separator's left. Move the separator right before anything can hide.
 
-### 2. status item의 소유 PID를 믿을 수 없다
+### 2. The owning PID of a status item cannot be trusted
 
-macOS 26에서 모든 status item 윈도우의 `kCGWindowOwnerPID`는 **제어 센터**를 가리킨다.
-실제 소유 앱은 다음 순서로 알아낸다 ([MenuBarScanner.swift](Sources/Fire/MenuBar/MenuBarScanner.swift)):
+On macOS 26, `kCGWindowOwnerPID` for every status item window points at **Control Center**.
+The real owner is resolved in this order
+([MenuBarScanner.swift](Sources/Fire/MenuBar/MenuBarScanner.swift)):
 
-1. 접근성 `AXExtrasMenuBar` 열거 — 가장 정확, 손쉬운 사용 권한 필요
-2. `kCGWindowName`에 들어 있는 번들 식별자 — 권한 없이도 읽히지만 항목에 따라 `Item-0`만 온다
-3. 메뉴바 오른쪽 기준 상대 순서 — 마지막 수단 (기획안 14절)
+1. Enumerate Accessibility `AXExtrasMenuBar` — most accurate, needs Accessibility permission
+2. The bundle identifier embedded in `kCGWindowName` — readable without permission, but some
+   items only ever report `Item-0`
+3. Relative order from the right edge of the menu bar — last resort
 
-주의할 점 두 가지를 실측으로 확인했다.
+Two traps here, both measured.
 
-- **`kCGWindowName`의 번들 식별자가 이웃 항목의 것일 때가 있다.** 그래서 접근성이 소유 앱을
-  알려준 항목에서는 창 이름을 소유자 판단에 쓰지 않고, `WiFi`·`Battery`·`Clock`처럼
-  한 앱의 여러 항목을 구분하는 용도로만 쓴다.
-- **접근성 호출은 기본 타임아웃이 6초라 앱 전체를 순회하면 20초 넘게 멈춘다.**
-  `AXUIElementSetMessagingTimeout`으로 0.25초로 끊어 2초 안에 끝나게 했다.
-- 접근성 제목(`배터리 62%`, `Itsycal, 8월 1일`)은 계속 바뀌므로 표시용으로만 쓰고 식별자에 넣지 않는다.
+- **The bundle identifier in `kCGWindowName` is sometimes the neighbor's.** So for items
+  where Accessibility already told us the owner, the window name is not used to decide
+  ownership — only to tell apart several items belonging to one app, like `WiFi`, `Battery`,
+  and `Clock`.
+- **Accessibility calls default to a 6 second timeout**, which makes a full sweep of every
+  app stall for more than 20 seconds. `AXUIElementSetMessagingTimeout` cuts it to 0.25 s and
+  brings the sweep under 2 seconds.
+- Accessibility titles (`Battery 62%`, `Itsycal, August 1`) keep changing, so they are shown
+  to the user but never used as part of an identifier.
 
-### 식별자는 권한 상태와 무관해야 한다
+### Identifiers must not depend on permission state
 
-번들 식별자는 접근성 권한이 있어야만 알 수 있다. 그래서 번들 식별자를 우선하면
-권한을 껐다 켤 때마다 같은 항목의 식별자가 바뀌어 저장된 배치가 통째로 날아간다.
+A bundle identifier is only knowable with Accessibility permission. Preferring it means the
+identifier for the same item changes whenever permission is toggled, and the entire saved
+layout evaporates.
 
-그래서 순서를 뒤집었다. **항목 고유 이름(`WiFi`, `Battery`, `Clock`)을 번들 식별자보다 먼저** 본다.
-고유 이름은 권한 없이도 읽히므로 어느 쪽이든 같은 식별자가 나온다. 실측으로 확인했다.
+So the priority is inverted: **an item's own name (`WiFi`, `Battery`, `Clock`) is preferred
+over the bundle identifier.** Names are readable without permission, so both states produce
+the same identifier. Verified:
 
 ```bash
-# 권한 있음(번들 실행)과 권한 없음(셸 직접 실행)의 결과가 같아야 한다
-open -n build/Fire.app --args --dump && cat ~/Library/Application\ Support/Fire/dump.txt
-./build/Fire.app/Contents/MacOS/Fire --dump
+# with permission (running the bundle) and without (running the binary from a shell)
+# must produce the same result
+open -n .build/app/Fire.app --args --dump && cat ~/Library/Application\ Support/Fire/dump.txt
+./.build/app/Fire.app/Contents/MacOS/Fire --dump
 ```
 
-### 캡처한 아이콘은 그대로 쓸 수 없다
+### Captured icons cannot be used as-is
 
-- 메뉴바 글리프는 배경에 따라 흰색으로 캡처된다. 밝은 설정 창에 얹으면 보이지 않는다.
-  단색으로 판별되면 알파만 남겨 `labelColor`로 다시 칠한다([MenuBarIconRenderer.swift](Sources/Fire/MenuBar/MenuBarIconRenderer.swift)).
-- 서드파티 앱 상당수는 캡처하면 **투명한 이미지만** 나온다. 그리기가 제어 센터 쪽에서
-  일어나기 때문으로 보인다. 이 경우 소유 앱의 아이콘으로 대체한다.
+- Menu bar glyphs capture as white against their background, which makes them invisible on a
+  light settings window. When a capture is detected as a single color, only its alpha is
+  kept and it is repainted in `labelColor`
+  ([MenuBarIconRenderer.swift](Sources/Fire/MenuBar/MenuBarIconRenderer.swift)).
+- A good number of third-party apps capture as a **fully transparent image**, apparently
+  because the drawing happens on the Control Center side. Those fall back to the owning
+  app's icon.
 
-### 3. 디스플레이마다 메뉴바 윈도우가 따로 생긴다
+### 3. Every display gets its own menu bar windows
 
-같은 항목이 디스플레이 수만큼 중복되고, 보조 디스플레이용 사본은 이름에 `Clone`이 붙는다.
-스캐너는 화면 소속으로 행을 나누고, 사본과 화면 밖 윈도우를 걸러낸 뒤,
-항목이 가장 많은 행을 기준으로 삼는다.
+The same item is duplicated once per display, and the copies for secondary displays carry
+`Clone` in the name. The scanner groups windows into rows by screen, filters out clones and
+off-screen windows, and takes the row with the most items as the reference.
 
-## 구조
+## Layout
 
 ```
 Sources/Fire/
-├── App/              진입점, 조립, 진단 모드
-├── StatusItem/       Fire 아이콘 + 구분자 (숨김 메커니즘)
-├── MenuBar/          탐색 · 식별 · 구역 적용 · 클릭 프록시
-├── FireBar/          패널 · 아이콘 뷰 · 위치 계산
-├── Events/           빈 영역 판정 · 전역 클릭 · 단축키 · 시스템 이벤트
-├── Stability/        재구성 코디네이터 · Watchdog
-├── Settings/         설정창 · 저장소
-├── Permissions/      손쉬운 사용 · 화면 기록
+├── App/              entry point, wiring, diagnostic modes
+├── StatusItem/       the Fire icon and the separator (the hiding mechanism)
+├── MenuBar/          scanning, identification, applying zones, click proxying
+├── FireBar/          the panel, icon views, placement
+├── Events/           empty-area detection, global clicks, shortcuts, system events
+├── Stability/        rebuild coordinator, watchdog
+├── Settings/         settings window, storage
+├── Permissions/      Accessibility, Screen Recording
 └── LoginItem/        SMAppService
 ```
 
-데이터는 `~/Library/Application Support/Fire/`에 저장한다.
-PID, 윈도우 번호, 디스플레이 번호, 화면 좌표, 캡처 이미지는 저장하지 않는다 (기획안 22절).
+Data lives in `~/Library/Application Support/Fire/`. PIDs, window numbers, display numbers,
+screen coordinates, and captured images are never stored.
 
-## 구현 현황
+## Status
 
-| 기획안 단계 | 상태 |
+| Phase | State |
 |---|---|
-| Phase 1 앱 뼈대 | 완료 — accessory 앱, Dock 비표시, 상태 아이템, 설정창, 로그인 항목, 단축키 |
-| Phase 2 메뉴바 탐색 | 완료 — 실측 검증됨 (16개 항목 정확히 탐색) |
-| Phase 3 두 구역 관리 | 완료 — 단, 위 "OS 제약 1"의 한계 안에서 |
-| Phase 4 Fire Bar | 완료 — 패널, 클릭 프록시, 자동 닫기, 드래그 순서 변경 |
-| Phase 5 빈 메뉴바 클릭 | 완료 — 클릭을 소비하지 않는 전역 모니터 방식 |
-| Phase 6 안정성 | 완료 — 재구성 상태 머신, 지연 검증, Watchdog, 수동 복구 |
-| Phase 7 실사용 검증 | **미완료** — 아래 참고 |
-| Phase 8 패키징 | 미완료 — 현재 ad-hoc 서명. Developer ID 서명·공증 필요 |
+| 1 App skeleton | Done — accessory app, no Dock icon, status item, settings, login item, shortcuts |
+| 2 Menu bar scanning | Done — measured (16 items scanned exactly) |
+| 3 Two-zone management | Done, within the limits of "OS constraints 1" above |
+| 4 Fire Bar | Done — panel, click proxy, auto-close, drag to reorder |
+| 5 Empty menu bar click | Done — global monitor that does not consume the click |
+| 6 Stability | Done — rebuild state machine, delayed verification, watchdog, manual recovery |
+| 7 Real-world verification | In progress — see below |
+| 8 Packaging | Done — Developer ID signing, notarization, dmg, GitHub release (`scripts/release.sh`) |
 
-## 권한이 안 붙을 때
+## When permissions do not stick
 
-시스템 설정 목록에는 Fire가 켜져 있는데 앱은 권한이 없다고 나오면, **서명이 바뀐 것**이다.
-TCC는 코드 서명 신원에 권한을 묶는다. ad-hoc 서명(`-`)은 신원이 없어 바이너리 해시로 기억하므로
-리빌드할 때마다 승인이 무효가 된다.
+If System Settings lists Fire as enabled but the app says it has no permission, **the
+signature changed**. TCC binds permissions to the code signing identity. An ad-hoc signature
+(`-`) has no identity, so it is remembered by binary hash and every rebuild invalidates the
+grant.
 
-`build.sh`는 `Apple Development` 인증서를 자동으로 찾아 쓴다. 인증서가 있으면 팀 식별자로
-신원이 고정되어 리빌드해도 승인이 유지된다. 다른 인증서를 쓰려면:
+`build.sh` finds and uses an `Apple Development` certificate automatically. With a
+certificate the identity is pinned by team identifier and survives rebuilds. To use a
+different one:
 
 ```bash
 FIRE_SIGN_IDENTITY="Developer ID Application: ..." ./build.sh release
 ```
 
-ad-hoc으로 빌드된 적이 있다면 시스템 설정에서 기존 Fire 항목을 **삭제한 뒤 다시 추가**해야 한다.
+If it was ever built ad-hoc, **remove the existing Fire entry in System Settings and add it
+again**.
 
-## 아직 검증되지 않은 것
+## Not yet verified
 
-권한을 켠 실제 환경에서 확인해야 하는 항목이다. 기획안 25절 Phase 0에 해당한다.
+Items that need a real environment with permissions granted.
 
-- [x] 접근성 경로로 소유 앱 식별 — 16개 항목 전부 정확히 식별 (`--dump`)
-- [x] 구분자 확장으로 실제 숨김 + 원상 복원 (`--verify-hide`)
-- [ ] Fire Bar 아이콘 클릭이 원본 앱 메뉴를 여는지 (Google Drive, Dropbox, VPN, 클립보드, 입력기, 제어 센터)
-- [ ] 왼쪽·오른쪽 빈 영역 클릭이 Apple 메뉴·앱 메뉴를 방해하지 않는지
-- [ ] 노치 주변 좌표 처리
-- [ ] 외부 모니터 20회 연결·해제 후 자동 복구
-- [ ] 잠자기 10회 복귀 후 자동 복구
-- [ ] 클램셸 모드 진입·해제
+- [x] Owner identification through Accessibility — all 16 items identified exactly (`--dump`)
+- [x] Real hiding via separator expansion, and clean restore (`--verify-hide`)
+- [ ] Fire Bar icon clicks opening the original app's menu (Google Drive, Dropbox, VPN,
+      clipboard managers, input methods, Control Center)
+- [ ] Left and right empty-area clicks not interfering with the Apple menu or app menus
+- [ ] Coordinate handling around the notch
+- [ ] Automatic recovery after 20 external display connect/disconnect cycles
+- [ ] Automatic recovery after 10 sleep/wake cycles
+- [ ] Entering and leaving clamshell mode
 
-## 이름
+## The name
 
-기획안 3절대로, Ice 기반의 동명 공개 프로젝트가 있으므로 외부 배포 전에 이름을 다시 검토한다.
+There is a public project of the same name built on Ice, so the name is up for review.
+
+The original planning document is
+[Fire_맥_메뉴바_앱_기획안.md](Fire_맥_메뉴바_앱_기획안.md) (Korean).
