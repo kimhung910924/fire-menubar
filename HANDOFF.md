@@ -5,56 +5,80 @@
 
 ---
 
-## 0. 지금 막힌 것 (2026-08-28 밤)
+## 0. 해결됨 (2026-08-29 새벽) — "메뉴가 1.5초 뒤 저절로 닫힌다"
 
-**Fire Bar 아이콘을 눌러 연 메뉴가 1.5초쯤 뒤 저절로 닫힌다.**
+**범인은 Fire 자신의 폴백 클릭이었다.** 인과 사슬:
 
-고쳐진 부분은 있다. 전에는 메뉴가 **화면 밖**(`x=-995`)에 열려 아무것도 안 보였고,
-지금은 **화면 안**(`x=674`)에 제대로 열린다. 남은 건 수명이다.
+1. 메뉴가 붙은 status item의 `AXPress`는 **메뉴를 즉시 열지만 성공을 반환하지 못한다.**
+   열린 메뉴의 트래킹이 AX 응답을 막고 있다가 ~1.5초 뒤 `-25204(CannotComplete)`로 끝난다.
+   그 시점에 액션은 이미 전달되어 메뉴가 떠 있다.
+2. Fire는 그 반환값을 실패로 해석해 **좌표 클릭 폴백**을 쐈다.
+3. 그 합성 클릭이 방금 연 메뉴를 토글로 닫았다 → "1.5초 뒤 저절로 닫힘".
 
-### 결정적 단서
+"Fire를 죽이면 메뉴가 유지된다"던 결정적 단서와 정확히 일치한다 — 죽이면 폴백이 안 나간다.
 
-**메뉴가 뜬 직후 Fire를 죽이면 메뉴가 그대로 유지된다.** 원인은 Fire 안에 있다.
+곁들여 확정한 사실:
 
-```
-0.3초  메뉴 열림 x=675  ← 여기서 Fire 종료
-0.4초  메뉴 열림 x=675  ← 이후 계속 유지
-```
+- **`postToPid` 합성 클릭으로 연 메뉴는 macOS가 ~0.27초 뒤 거둬간다** (3회 실측,
+  Fire의 어떤 코드도 개입하지 않은 상태에서). 합성 이벤트로 시작된 트래킹은 살아남지
+  못한다. 접근성이 막힌 항목에만 쓰는 최후 수단으로 강등했다.
+- 접근성 폴링(`frontmostMenuBarHasOpenMenu`)은 **무죄였다.** 꺼도 죽고 켜도 죽었다.
+- AX 요청의 messaging timeout을 0.5초로 줄이면 press가 **전달되기 전에** 끊긴다.
+  메뉴 자체가 안 열린다. 반환을 기다리지 않을 거면 타임아웃은 길게 두어야 한다.
 
-그런데 아래는 실험으로 전부 배제했다.
+### 고친 구조 (`MenuBarActionProxy` 전면 재작성)
 
-| 후보 | 결과 |
-|---|---|
-| 숨김 복원(collapse) | 꺼도 닫힘. 메뉴가 닫히는 동안 구분자가 `x=909`로 고정인 것도 실측 |
-| 접근성 폴링(`frontmostMenuBarHasOpenMenu`) | 꺼도 닫힘 |
-| Fire Bar 패널 닫기(`orderOut`) | 진단 경로엔 없는데도 닫힘 |
-| 재구성·Watchdog | 트리거가 발생하지 않음(Watchdog은 15초 주기) |
-| 소유 앱 활성화, 커서 위치(`CGWarpMouseCursorPosition`) | 효과 없음 |
-| HiddenNotch의 오버레이 재구성 | HiddenNotch 1.2에서 고쳤으나 그대로 닫힘 |
+1. 대상 AX 엘리먼트를 찾는다 (읽기는 0.5초 타임아웃으로 빠르게).
+2. `AXPress`를 **백그라운드 스레드에서 발사**한다. 반환값은 기다리지 않는다.
+3. 성패는 **화면 관찰**로 가린다 — CGWindowList에서 기준선에 없던 팝업 메뉴 창(레이어
+   101)이 나타나는지. AX 질의는 쓰지 않는다.
+4. 메뉴가 열렸으면 폴백을 쏘지 않고, 그 창들이 닫힐 때까지(바깥 클릭) 기다렸다가
+   숨김을 복원한다.
+5. 메뉴도 없고 성공 반환도 없을 때만 좌표 클릭 폴백.
 
-### 다음 단계
+검증(3회 반복): 클릭 → 1.3초에 메뉴 열림 → 바깥 클릭 전까지 유지(7초+) → 바깥 클릭에
+닫힘 → 숨김 자동 복원. 그 사이 폴백 발사 0회.
 
-Fire에 임시 로그를 넣어 **누른 뒤 무슨 일이 일어나는지 시각과 함께** 기록한다.
-`MenuBarScanner.scan()`, `ControlItemCoordinator.expand/collapse`, 각 타이머 진입점에
-`Diagnostics`의 결과 파일로 시각을 찍으면 범인이 나온다. 빌드 한 번, 측정 한 번이면 된다.
+### 측정 도구 (이번에 추가, 계속 쓸 것)
 
-### 측정 방법
+- `Trace` — 시각(경과 초)이 찍힌 진단 로그. `Application Support/Fire/trace.txt`.
+- `diag.pressTrace` (object=stableId) — 누르기 + 메뉴 수명 관찰 + 앱 활성화 관찰을
+  Fire 프로세스 안에서 한 번에 수행 (헬퍼 프로세스 포커스 오염 없음).
+- `diag.clickAt` (object="x,y") — 실제 좌표 클릭 합성. "바깥 클릭으로 닫히는가" 검증용.
 
 ```bash
-# 누르기 (object = stableId)
-swift -e 'import Foundation; DistributedNotificationCenter.default().postNotificationName(.init("com.rrllab.FireMenuBar.diag.press"), object: "com.rrllab.HiddenNotch", userInfo: nil, deliverImmediately: true)'
-cat ~/Library/Application\ Support/Fire/diag-result.txt
+swift -e 'import Foundation; let c = DistributedNotificationCenter.default()
+c.postNotificationName(Notification.Name("com.rrllab.FireMenuBar.diag.pressTrace"), object: "com.rrllab.HiddenNotch", userInfo: nil, deliverImmediately: true)
+Thread.sleep(forTimeInterval: 8)
+c.postNotificationName(Notification.Name("com.rrllab.FireMenuBar.diag.clickAt"), object: "400,500", userInfo: nil, deliverImmediately: true)
+Thread.sleep(forTimeInterval: 4)'
+cat ~/Library/Application\ Support/Fire/trace.txt
 ```
 
-메뉴 위치와 수명은 `CGWindowListCopyWindowInfo(.optionAll)`에서 레이어가
-`CGWindowLevelForKey(.popUpMenuWindow)`(=101)인 창을 0.1초 간격으로 보면 된다.
-구분자 위치는 같은 목록에서 이름이 `FireSeparatorItem`인 창을 본다.
-
-⚠️ **사용자가 컴퓨터를 쓰는 중이면 측정이 오염된다.** 다른 곳을 클릭한 것과 구분되지
-않는다. 실제로 이 때문에 "Workspace Shelf도 0.2초 만에 닫힌다"고 잘못 읽었다.
-
+⚠️ **사용자가 컴퓨터를 쓰는 중이면 측정이 오염된다.** 반복 측정으로 가린다.
 ⚠️ **알림을 보내는 헬퍼 프로세스가 끝나면서 포커스를 흔든다.** 보내기와 재기를 한
-프로세스 안에서 해야 깨끗하다.
+프로세스 안에서 해야 깨끗하다 (pressTrace가 그렇게 한다).
+
+### 같은 날 함께 한 것 (2026-08-29)
+
+- **TCC 낡은 기록 문제** — 재빌드 뒤 "시스템 설정 토글은 켜져 있는데 권한 없음" 상태.
+  `tccutil reset Accessibility/ScreenCapture com.rrllab.FireMenuBar`로 기록을 지우고
+  사용자가 다시 켜서 해결. 설정 화면 권한 행에 "기록 초기화" 버튼을 달았다.
+- **영어 지원** — Fire·Workspace Shelf·HiddenNotch 셋 다. 코드 내 `L10n.t(ko, en)`
+  방식(리소스 번들 없음 — 수제 .app 조립이라 코드에 두 언어를 나란히 두는 게 안전).
+- **설정 화면 문구** — "메뉴바에 표시" 구역이 읽기 전용인 이유와 ⌘+드래그 안내를 명시.
+- **Workspace Shelf 로컬 빌드 서명** — `build-app.sh`의 ad-hoc 기본값 + 하드닝 런타임
+  조합이 dyld "different Team IDs"로 즉사시킴. 개발 인증서 자동 선택으로 고침.
+- **Workspace Shelf 위치값 오염** — 저장된 `NSStatusItem Preferred Position Item-0`이
+  2280(외부 모니터 시절 값)이라 내장 1470pt 화면에서 아이콘이 화면 밖으로. 앱 종료 →
+  `defaults write com.rrllab.WorkspaceShelf ... -float 580` → 재실행으로 복구(4.3 절차).
+  숨김 구간에 있던 앱이 재시작하면 같은 오염이 재발할 수 있다.
+- **Workspace Shelf 시작 행처럼 보이는 것** — `restoreWorkspaces`의 `open(~/Desktop,
+  O_EVTONLY)`가 TCC 데스크탑 폴더 동의를 기다리며 블록. 잠금 화면 뒤에 동의
+  다이얼로그가 떠 있어서 영원히 기다리는 것처럼 보였다. 재서명 뒤 첫 실행이면 정상 —
+  사용자가 허용을 누르면 풀린다.
+- **HiddenNotch `xcodebuild test`가 러너 연결 전에 행** — 현지화 변경 전(HEAD)에도
+  동일하게 실패하는 기존 환경 문제. 원인 미상, 빌드는 정상.
 
 ## 0-1. 사용자가 직접 해야 하는 것
 
