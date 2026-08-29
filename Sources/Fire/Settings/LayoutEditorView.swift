@@ -56,6 +56,7 @@ final class LayoutEditorModel: ObservableObject {
 
     func reload() {
         guard let layout else { return }
+        isArrangeMode = layout.isArrangeMode
         let store = SettingsStore.shared
         // 식별자 중복은 스캐너가 없애지만, 여기서 크래시로 번지지 않도록 안전한 초기화를 쓴다.
         let onScreen = Dictionary(layout.discoveredItems.map { ($0.stableId, $0) },
@@ -273,6 +274,35 @@ final class LayoutEditorModel: ObservableObject {
     }
 
     // MARK: 버튼 동작
+
+    /// 메뉴바에서 직접 순서를 바꾸는 중인가. 그동안 숨김이 통째로 풀린다.
+    @Published var isArrangeMode = false
+
+    /// 숨김을 잠시 풀어 전부 보이게 한다.
+    ///
+    /// 숨겨진 아이콘은 화면 밖이라 `⌘`+드래그로 잡을 수 없다. 순서를 고칠 수 있는 사람은
+    /// 사용자뿐인데 정작 그 대상이 안 보이는 상태였다(2026-08-29 사용자 지적).
+    func beginArrange() {
+        layout?.beginArrangeMode()
+        isArrangeMode = true
+        reload()
+        statusMessage = L10n.t(
+            "숨김을 풀었습니다. 메뉴바에서 ⌘ 키를 누른 채 아이콘을 원하는 자리로 옮기신 뒤 「정리 끝」을 눌러주세요.",
+            "Hiding is paused. ⌘-drag the icons in the menu bar where you want them, then click Done."
+        )
+    }
+
+    /// 바뀐 순서를 기준으로 다시 계산해 적용한다.
+    func endArrange() {
+        statusMessage = L10n.t("바뀐 순서로 다시 적용하는 중…", "Reapplying with the new order…")
+        layout?.endArrangeMode { [weak self] in
+            guard let self else { return }
+            self.isArrangeMode = false
+            self.reload()
+            self.statusMessage = self.conflictDescription()
+                ?? L10n.t("정리한 순서대로 적용했습니다.", "Applied in the order you arranged.")
+        }
+    }
 
     /// 기획안 21절 — 아이콘 다시 검색.
     func rescan() {
@@ -615,10 +645,55 @@ struct LayoutEditorView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            arrangeModeControls
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// 숨겨진 아이콘은 화면 밖이라 `⌘`+드래그로 잡을 수 없다.
+    /// 순서를 고치려면 먼저 보여야 하므로, 숨김을 잠시 통째로 푸는 길을 여기서 준다.
+    @ViewBuilder
+    private var arrangeModeControls: some View {
+        Divider().padding(.vertical, 2)
+        if model.isArrangeMode {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(
+                    L10n.t("숨김을 풀어 전부 보이는 중입니다",
+                           "Hiding is paused — everything is visible"),
+                    systemImage: "eye"
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Color.orange)
+
+                Text(L10n.t(
+                    "메뉴바에서 ⌘ 키를 누른 채 아이콘을 원하는 자리로 끌어 옮기세요. 다 옮기셨으면 「정리 끝」을 누르시면 바뀐 순서대로 다시 접습니다.",
+                    "⌘-drag the icons in the menu bar to where you want them. When you're done, click Done and Fire will re-apply hiding in the new order."
+                ))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Button(L10n.t("정리 끝 — 다시 적용", "Done — Reapply")) { model.endArrange() }
+                    .controlSize(.small)
+                    .keyboardShortcut(.defaultAction)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.t(
+                    "숨겨진 아이콘은 화면 밖에 있어 ⌘+드래그로 잡을 수 없습니다. 아래 버튼으로 잠시 전부 보이게 한 뒤 옮기세요.",
+                    "Hidden icons sit off-screen, so you can't ⌘-drag them. Use the button below to show everything first."
+                ))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Button(L10n.t("잠시 모두 펼치기", "Show All Temporarily")) { model.beginArrange() }
+                    .controlSize(.small)
+            }
+        }
     }
 
     private var optionsSection: some View {

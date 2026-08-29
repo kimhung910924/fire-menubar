@@ -308,6 +308,22 @@ enum Diagnostics {
             }
         }
 
+        // 정리 모드(숨김 일시 해제) 켜기/끄기. 설정창 버튼과 같은 경로를 탄다.
+        center.addObserver(
+            forName: .init("com.rrllab.FireMenuBar.diag.arrange"), object: nil, queue: .main
+        ) { note in
+            MainActor.assumeIsolated {
+                let on = (note.object as? String) != "off"
+                if on {
+                    SettingsWindowController.shared.model.beginArrange()
+                    writeDiagResult("arrange: 켬 (isArrangeMode=\(layout.isArrangeMode))")
+                } else {
+                    SettingsWindowController.shared.model.endArrange()
+                    writeDiagResult("arrange: 끔 요청")
+                }
+            }
+        }
+
         // 실제 좌표 클릭 합성 — "메뉴가 바깥 클릭으로 닫히는가" 검증용. object = "x,y" (CG 좌표).
         // 열린 메뉴가 있으면 그 클릭은 메뉴 트래킹이 삼키므로 아래 앱에는 전달되지 않는다.
         center.addObserver(

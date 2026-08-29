@@ -46,6 +46,40 @@ final class MenuBarLayoutController {
     /// 그래서 한 번 확인되면 판정에서 빼고 재시도하지 않는다. 분류가 바뀌면 지운다.
     private(set) var knownUnhideableIds: Set<String> = []
 
+    /// 사용자가 메뉴바에서 직접 `⌘`+드래그로 순서를 바꾸는 중인가.
+    ///
+    /// macOS는 다른 앱의 status item 순서를 프로그램이 바꾸는 것을 허용하지 않는다.
+    /// 순서를 고칠 수 있는 사람은 사용자뿐인데, **숨겨진 아이콘은 화면 밖이라 잡을 수가 없다.**
+    /// "⌘+드래그하세요"라는 안내가 정작 필요한 상황에서 불가능했던 이유다(2026-08-29 사용자 지적).
+    ///
+    /// 그래서 숨김을 잠시 통째로 풀어 전부 보이게 한다. 이 동안에는 재구성·Watchdog이
+    /// 몇 번을 돌아도 다시 접지 않는다.
+    private(set) var isArrangeMode = false
+
+    /// 정리 모드 시작 — 전부 보이게 한다.
+    func beginArrangeMode() {
+        guard !isArrangeMode else { return }
+        Trace.log("layout", "정리 모드 시작")
+        isArrangeMode = true
+        controlItems.expand()
+        controlItems.fireItem?.isVisible = true
+        misplacedItemIds = []
+        unintentionallyHiddenIds = []
+        NotificationCenter.default.post(name: Self.itemsDidChange, object: nil)
+    }
+
+    /// 정리 모드 종료 — 바뀐 순서를 기준으로 경계를 다시 잡고 적용한다.
+    ///
+    /// 순서가 바뀌었으므로 '끝내 못 숨긴다'는 기억은 버린다. 새 배치에서는 될 수도 있다.
+    func endArrangeMode(completion: @escaping () -> Void) {
+        guard isArrangeMode else { completion(); return }
+        Trace.log("layout", "정리 모드 종료")
+        isArrangeMode = false
+        forgetUnhideable()
+        expandedVisibleIds = []      // 기준선을 새 순서로 다시 잡게 한다
+        applySectionsVerified { _ in completion() }
+    }
+
     /// 검증 재시도를 모두 소진해 펼친 상태로 고정됐는가.
     ///
     /// 설정 화면이 이 값을 읽어 사용자에게 알린다. 숨김이 안 되는 상태이지만
@@ -275,6 +309,20 @@ final class MenuBarLayoutController {
     @discardableResult
     func applySections() -> Bool {
         Trace.log("layout", "applySections")
+
+        // 정리 모드 — 숨김을 걸지 않는다.
+        //
+        // 숨겨진 아이콘은 화면 밖이라 사용자가 `⌘`+드래그로 잡을 수 없다. 순서를 바꾸려면
+        // 일단 보여야 한다. 이 모드에서는 재구성·Watchdog이 몇 번을 돌든 펼친 상태를 지킨다.
+        guard !isArrangeMode else {
+            Trace.log("layout", "정리 모드 — 숨김 건너뜀")
+            controlItems.expand()
+            controlItems.fireItem?.isVisible = true
+            misplacedItemIds = []
+            NotificationCenter.default.post(name: Self.itemsDidChange, object: nil)
+            return true
+        }
+
         let store = SettingsStore.shared
         let hiddenIds = Set(store.items(in: .fireBar).map(\.stableId))
         let hasHiddenItems = !hiddenIds.subtracting([ControlItemCoordinator.fireIconStableId]).isEmpty
@@ -321,6 +369,12 @@ final class MenuBarLayoutController {
     func forgetUnhideable() { knownUnhideableIds = [] }
 
     func applySectionsVerified(attempt: Int = 1, completion: ((VerifyResult) -> Void)? = nil) {
+        // 정리 모드에서는 검증할 것이 없다. 펼친 것이 의도한 상태다.
+        guard !isArrangeMode else {
+            _ = applySections()
+            completion?(LayoutVerifier.verify(mustStayVisible: [], mustBeHidden: [], actualVisible: []))
+            return
+        }
         if attempt == 1 { verificationGaveUp = false }
 
         // 기준선을 다시 재려면 메뉴바를 펼쳐야 하는데, 그때 숨겨둔 아이콘이 전부 드러난다.
