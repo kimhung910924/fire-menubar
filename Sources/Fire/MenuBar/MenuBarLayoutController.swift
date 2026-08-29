@@ -46,6 +46,60 @@ final class MenuBarLayoutController {
     /// 그래서 한 번 확인되면 판정에서 빼고 재시도하지 않는다. 분류가 바뀌면 지운다.
     private(set) var knownUnhideableIds: Set<String> = []
 
+    /// 노치 용량이 모자라 접힌 항목. `unintentionallyHiddenIds`와 원인이 다르다.
+    ///
+    /// - `unintentionallyHiddenIds` — 분류가 이어지지 않아 경계에 말려든 것.
+    ///   `⌘`+드래그로 순서를 고치면 해결된다.
+    /// - `capacityOverflowIds` — **자리가 없어서** 접힌 것. 순서를 아무리 고쳐도 안 된다.
+    ///   하나를 Fire Bar로 보내는 수밖에 없다.
+    ///
+    /// 둘을 뭉뚱그리면 사용자가 될 리 없는 드래그를 반복하게 된다(2026-08-29).
+    private(set) var capacityOverflowIds: Set<String> = []
+
+    /// 마지막으로 계산한 용량. 설정 화면이 숫자로 보여준다.
+    private(set) var lastCapacity: CapacityPlan?
+
+    /// 대략 몇 개까지 들어가는가. 설정 화면 표시용.
+    private(set) var approximateSlots: Int?
+
+    /// 항목이 쓸 수 있는 폭. 노치가 있으면 그 오른쪽부터 화면 오른쪽 끝까지다.
+    ///
+    /// 노치 왼쪽은 앱 메뉴(파일·편집…) 자리라 status item이 못 간다. macOS는 오른쪽부터
+    /// 채우다가 노치에 닿으면 **그 항목부터 왼쪽 전부**를 감춘다(실측).
+    private static func availableWidth(for screen: NSScreen) -> CGFloat {
+        let right = screen.frame.maxX
+        guard screen.safeAreaInsets.top > 0 else {
+            // 노치 없는 화면. 앱 메뉴가 어디까지 차지하는지는 알 수 없으므로 화면 폭의
+            // 절반을 보수적인 상한으로 둔다. 넘칠 일이 거의 없다.
+            return screen.frame.width / 2
+        }
+        if let left = screen.auxiliaryTopLeftArea, let notchRight = screen.auxiliaryTopRightArea {
+            _ = left
+            return right - notchRight.minX
+        }
+        // auxiliary 영역을 못 읽으면 실측 기반 보수값(노치 폭 220pt)을 쓴다.
+        return right - (screen.frame.midX + 110)
+    }
+
+    /// 시스템이 제멋대로 넣었다 뺐다 하는 항목을 위해 비워둘 폭.
+    ///
+    /// 화면 기록 표시등(`sys:AudioVideoModule`)처럼 제어 센터가 상황에 따라 넣는 항목이 있다.
+    /// 이들을 위해 자리를 안 비워두면, 용량을 꽉 채운 상태에서 표시등이 뜰 때마다 맨 왼쪽
+    /// 아이콘이 노치에 닿아 사라졌다 돌아온다(2026-08-29 실측: 45초에 11↔12개 요동).
+    ///
+    /// 상수를 쓰지 않는다. **이 기계에서 실제로 관측된** 항목의 폭을 쓴다.
+    /// 한 번에 하나씩 뜨는 것이 보통이라 합이 아니라 **가장 넓은 것 하나**만 비운다.
+    private func transientReserve() -> CGFloat {
+        let present = Set(discoveredItems.map(\.stableId))
+        let absentSystemItems = lastKnownItems.values.filter { item in
+            guard !present.contains(item.stableId) else { return false }
+            // 제어 센터가 소유한 모듈만 본다. 앱이 꺼져서 없는 것은 대상이 아니다.
+            return item.stableId.hasPrefix("sys:")
+                || item.ownerBundleId == "com.apple.controlcenter"
+        }
+        return absentSystemItems.map(\.frame.width).max() ?? 0
+    }
+
     /// 사용자가 메뉴바에서 직접 `⌘`+드래그로 순서를 바꾸는 중인가.
     ///
     /// macOS는 다른 앱의 status item 순서를 프로그램이 바꾸는 것을 허용하지 않는다.
@@ -65,6 +119,7 @@ final class MenuBarLayoutController {
         controlItems.fireItem?.isVisible = true
         misplacedItemIds = []
         unintentionallyHiddenIds = []
+        capacityOverflowIds = []
         NotificationCenter.default.post(name: Self.itemsDidChange, object: nil)
     }
 
@@ -229,7 +284,16 @@ final class MenuBarLayoutController {
             rows: ScreenRows.split(items: allBarItems, screens: screens)
         )
 
-        switch BoundaryPlanner.plan(items: barItems, hiddenIds: fireBarIds) {
+        // 용량을 먼저 본다.
+        //
+        // 분류만 보고 경계를 놓으면, 넘치는 몫은 macOS가 노치에서 알아서 감춘다. 그 감춤은
+        // Fire의 계획 바깥이라 결과가 요동친다. 그래서 **Fire가 먼저 접는다.** 그러면
+        // 노치까지 밀려나는 항목이 없어져 macOS가 개입할 일이 사라진다.
+        let capacityOverflow = planCapacity(barItems: barItems, assignedHidden: fireBarIds)
+        capacityOverflowIds = Set(capacityOverflow)
+        let effectiveHidden = fireBarIds.union(capacityOverflow)
+
+        switch BoundaryPlanner.plan(items: barItems, hiddenIds: effectiveHidden) {
         case .nothingToHide:
             unintentionallyHiddenIds = []
             return []
@@ -244,8 +308,36 @@ final class MenuBarLayoutController {
             controlItems.rescueFireIconIfCollapsed()
             unintentionallyHiddenIds = Set(collateral)
                 .subtracting([ControlItemCoordinator.fireIconStableId])
+                // 자리가 없어 접힌 것은 '말려든 것'이 아니다. 원인이 달라 안내도 달라야 한다.
+                .subtracting(capacityOverflowIds)
             return collateral.compactMap { id in ordered.first { $0.stableId == id } }
         }
+    }
+
+    /// 노치 용량을 넘겨 Fire가 먼저 접어야 하는 항목을 고른다.
+    ///
+    /// 이미 FIRE_BAR로 지정된 것은 계산에서 뺀다 — 그건 어차피 숨겨지므로 자리를 안 쓴다.
+    private func planCapacity(barItems: [BarItem], assignedHidden: Set<String>) -> [String] {
+        guard let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+                ?? NSScreen.main ?? NSScreen.screens.first
+        else { return [] }
+
+        let visibleCandidates = barItems.filter { !assignedHidden.contains($0.stableId) }
+        let available = Self.availableWidth(for: screen)
+        let reserve = transientReserve()
+
+        let plan = MenuBarCapacity.plan(
+            items: visibleCandidates, availableWidth: available, reserve: reserve
+        )
+        lastCapacity = plan
+        approximateSlots = MenuBarCapacity.approximateSlots(
+            items: visibleCandidates, availableWidth: available
+        )
+
+        if !plan.overflowIds.isEmpty {
+            Trace.log("layout", "용량 초과 \(plan.overflowIds.count)개 — 가용 \(Int(plan.availableWidth))pt, 사용 \(Int(plan.usedWidth))pt, 확보 \(Int(plan.reservedWidth))pt")
+        }
+        return plan.overflowIds
     }
 
     /// 기획안 10절 — Fire 아이콘을 메인 메뉴바 안에서 원하는 자리로 옮긴다.
@@ -319,13 +411,18 @@ final class MenuBarLayoutController {
             controlItems.expand()
             controlItems.fireItem?.isVisible = true
             misplacedItemIds = []
+            capacityOverflowIds = []
             NotificationCenter.default.post(name: Self.itemsDidChange, object: nil)
             return true
         }
 
         let store = SettingsStore.shared
         let hiddenIds = Set(store.items(in: .fireBar).map(\.stableId))
-        let hasHiddenItems = !hiddenIds.subtracting([ControlItemCoordinator.fireIconStableId]).isEmpty
+        // 용량 초과분도 접어야 한다. 분류상 숨길 게 없어도 자리가 모자라면 Fire가 접는다.
+        let hasHiddenItems = !hiddenIds
+            .subtracting([ControlItemCoordinator.fireIconStableId])
+            .union(capacityOverflowIds)
+            .isEmpty
 
         if hasHiddenItems {
             controlItems.collapse()
@@ -548,9 +645,11 @@ final class MenuBarLayoutController {
         let storedIds = SettingsStore.shared.items(in: .fireBar)
             .map(\.stableId)
             .filter { $0 != ControlItemCoordinator.fireIconStableId }
+        // 용량 때문에 접힌 것도 넣는다. 메뉴바에서 사라졌는데 Fire Bar에도 없으면
+        // 그 아이콘에 닿을 방법이 아예 없어진다.
         let ids = FireBarContents.ids(
             stored: storedIds,
-            collateral: unintentionallyHiddenIds,
+            collateral: unintentionallyHiddenIds.union(capacityOverflowIds),
             physicalOrder: physicalOrder
         )
         let discovered = Dictionary(discoveredItems.map { ($0.stableId, $0) },

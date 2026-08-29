@@ -57,6 +57,13 @@ final class LayoutEditorModel: ObservableObject {
     func reload() {
         guard let layout else { return }
         isArrangeMode = layout.isArrangeMode
+        capacitySlots = layout.approximateSlots
+        capacityUsed = Int(layout.lastCapacity?.usedWidth ?? 0)
+        capacityAvailable = Int(layout.lastCapacity?.availableWidth ?? 0)
+        capacityReserved = Int(layout.lastCapacity?.reservedWidth ?? 0)
+        capacityOverflowNames = layout.capacityOverflowIds.sorted().map { id in
+            layout.item(withId: id)?.ownerName ?? layout.lastKnownItems[id]?.ownerName ?? id
+        }
         let store = SettingsStore.shared
         // 식별자 중복은 스캐너가 없애지만, 여기서 크래시로 번지지 않도록 안전한 초기화를 쓴다.
         let onScreen = Dictionary(layout.discoveredItems.map { ($0.stableId, $0) },
@@ -255,20 +262,41 @@ final class LayoutEditorModel: ObservableObject {
     }
 
     /// 연속 구간으로 만들려면 무엇을 어디로 `⌘`+드래그해야 하는지.
+    ///
+    /// **좌표를 믿을 수 있는 항목만 계산에 넣는다.** 노치에 가려졌거나 창이 없는 항목은
+    /// 접근성이 엉뚱한 좌표를 보고한다(실측: 화면이 1470pt인데 x=2722). 그런 항목을
+    /// 기준점으로 삼으면 "보이는 것 10개를 전부 저기로 옮기세요" 같은 거꾸로 된 안내가 나온다
+    /// (2026-08-29 — 「제어 센터」만 5줄 반복되는 화면이 실제로 나왔다).
     func contiguityAdvice() -> [String] {
         guard let layout else { return [] }
+
+        let trustworthy = layout.physicalOrderItems.filter {
+            $0.stableId != ControlItemCoordinator.fireIconStableId
+                // Fire 아이콘은 우리 것이라 스스로 피신한다(`rescueFireIconIfCollapsed`).
+                && !$0.isNotchConcealed && $0.windowNumber != 0
+        }
+        let trustworthyIds = Set(trustworthy.map(\.stableId))
+
         let hiddenIds = Set(SettingsStore.shared.items(in: .fireBar).map(\.stableId))
             .subtracting([ControlItemCoordinator.fireIconStableId])
-        // Fire 아이콘은 우리 것이라 스스로 피신한다(`rescueFireIconIfCollapsed`).
-        // 사용자에게 옮기라고 할 이유가 없다.
-        let barItems = layout.physicalOrderItems
-            .filter { $0.stableId != ControlItemCoordinator.fireIconStableId }
-            .map { BarItem(stableId: $0.stableId, minX: $0.frame.minX, width: $0.frame.width) }
+            // 자리가 없어 접힌 것은 순서 문제가 아니다. 옮겨봐야 소용없다.
+            .subtracting(layout.capacityOverflowIds)
+            .intersection(trustworthyIds)
+
+        let barItems = trustworthy.map {
+            BarItem(stableId: $0.stableId, minX: $0.frame.minX, width: $0.frame.width)
+        }
+
+        // 이름은 짧은 쪽을 쓴다. 제어 센터는 항목이 여럿이라 앱 이름만으로는
+        // 「제어 센터를 …」가 여러 줄 반복되어 무엇을 가리키는지 알 수 없다.
+        let label = { (id: String) -> String in
+            guard let item = layout.item(withId: id) else { return id }
+            return Self.shortLabel(stableId: item.stableId, ownerName: item.ownerName)
+        }
         return ContiguityAdvisor.advice(items: barItems, hiddenIds: hiddenIds).map { advice in
-            let name = { (id: String) in layout.item(withId: id)?.ownerName ?? id }
-            return L10n.t(
-                "\(name(advice.itemId))를 \(name(advice.toRightOfId)) 오른쪽으로 ⌘+드래그하세요.",
-                "⌘-drag \(name(advice.itemId)) to the right of \(name(advice.toRightOfId))."
+            L10n.t(
+                "\(label(advice.itemId))를 \(label(advice.toRightOfId)) 오른쪽으로 ⌘+드래그하세요.",
+                "⌘-drag \(label(advice.itemId)) to the right of \(label(advice.toRightOfId))."
             )
         }
     }
@@ -277,6 +305,16 @@ final class LayoutEditorModel: ObservableObject {
 
     /// 메뉴바에서 직접 순서를 바꾸는 중인가. 그동안 숨김이 통째로 풀린다.
     @Published var isArrangeMode = false
+
+    /// 이 화면에 대략 몇 개까지 들어가는가.
+    @Published var capacitySlots: Int?
+    /// 지금 메뉴바가 쓰고 있는 폭과 남은 폭.
+    @Published var capacityUsed: Int = 0
+    @Published var capacityAvailable: Int = 0
+    /// 시스템 표시등을 위해 비워둔 폭. 0이면 확보하지 않았다는 뜻이다.
+    @Published var capacityReserved: Int = 0
+    /// 자리가 없어 접힌 항목의 이름. `⌘`+드래그로는 해결되지 않는다.
+    @Published var capacityOverflowNames: [String] = []
 
     /// 숨김을 잠시 풀어 전부 보이게 한다.
     ///
@@ -363,6 +401,7 @@ struct LayoutEditorView: View {
                 sectionBox(section: .main, items: model.mainItems)
                 sectionBox(section: .fireBar, items: model.fireBarItems)
                 unidentifiedSection
+                capacitySection
                 hintText
                 optionsSection
                 shortcutSection
@@ -600,6 +639,55 @@ struct LayoutEditorView: View {
                             .opacity(0.6)
                     }
                     Spacer(minLength: 0)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    /// 이 화면에 몇 개가 들어가는지, 자리가 없어 접힌 것이 무엇인지.
+    ///
+    /// 숫자를 안 보여주면 사용자가 "왜 안 보이지"를 추측해야 한다. 아이콘이 용량보다 많으면
+    /// 무엇이든 반드시 접히는데, 그 사실 자체를 알 방법이 없었다(2026-08-29 사용자 지적).
+    @ViewBuilder
+    private var capacitySection: some View {
+        if model.capacityAvailable > 0 {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "ruler")
+                        .foregroundStyle(.tertiary)
+                    if let slots = model.capacitySlots {
+                        Text(L10n.t("이 화면에는 약 \(slots)개까지 들어갑니다",
+                                    "About \(slots) icons fit on this display"))
+                            .font(.callout.weight(.medium))
+                    }
+                    Text(L10n.t("\(model.capacityUsed) / \(model.capacityAvailable)pt 사용",
+                                "\(model.capacityUsed) / \(model.capacityAvailable)pt used"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if model.capacityReserved > 0 {
+                    Text(L10n.t(
+                        "시스템 표시등(화면 기록 등)이 떴다 사라질 자리로 \(model.capacityReserved)pt를 비워뒀습니다. 이게 없으면 표시등이 뜰 때마다 맨 왼쪽 아이콘이 사라졌다 돌아옵니다.",
+                        "\(model.capacityReserved)pt is kept free for system indicators (screen recording and the like) that come and go. Without it, the leftmost icon would vanish and reappear every time one shows up."
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !model.capacityOverflowNames.isEmpty {
+                    let names = model.capacityOverflowNames.joined(separator: ", ")
+                    Text(L10n.t(
+                        "자리가 없어 \(names)을(를) Fire Bar로 옮겼습니다. 이건 순서 문제가 아니라 공간 문제라 ⌘+드래그로는 해결되지 않습니다 — 메뉴바에 꼭 두셔야 한다면 다른 아이콘을 하나 Fire Bar로 보내주세요.",
+                        "\(names) moved to the Fire Bar because there is no room. This is a space problem, not an ordering one, so ⌘-dragging won't help — if you need it in the menu bar, send another icon to the Fire Bar instead."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(10)
