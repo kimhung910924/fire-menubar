@@ -171,15 +171,26 @@ final class MenuBarLayoutController {
         // 순서 정보가 비어 있었다. 그러면 설정 화면이 순서를 모르는 항목을 전부 뒤로 밀어버린다.
         //
         // Fire 아이콘도 포함해야 한다. 목록에서 빼면 순서를 몰라 역시 맨 뒤로 밀린다.
-        let scannedOrder = scanned
+        //
+        // 절대 x로 전부 한 줄에 정렬하면 안 된다. 외부 모니터가 연결되면 메뉴바가 화면마다
+        // 복제되어, 내장 화면 항목과 외부 화면 항목이 서로 다른 좌표계인 채로 뒤섞여
+        // 정렬된다(`alignSeparator`가 이미 겪은 문제 — `ScreenRows.swift` 참고).
+        // 그 결과 설정 화면 순서가 실제 메뉴바 순서와 완전히 어긋나 보였다(2026-09-09).
+        // 화면 하나(항목이 가장 잘 잡힌 행)만 기준으로 삼아야 한다.
+        let filteredScanned = scanned
             // 구분자는 사용자에게 보여줄 항목이 아니므로 순서에서 뺀다.
             .filter { !$0.stableId.contains(ControlItemCoordinator.separatorAutosaveName) }
-            .sorted { $0.frame.minX < $1.frame.minX }
-            .map { item in
+        let scannedBarItems = filteredScanned.map { item in
+            BarItem(
                 // 스캔에서 본 Fire 아이콘을 설정 화면이 쓰는 고정 식별자로 바꿔준다.
-                item.isFireControlItem ? ControlItemCoordinator.fireIconStableId : item.stableId
-            }
-        physicalOrder = Self.mergedOrder(previous: physicalOrder, current: scannedOrder)
+                stableId: item.isFireControlItem ? ControlItemCoordinator.fireIconStableId : item.stableId,
+                minX: item.frame.minX,
+                width: item.frame.width
+            )
+        }
+        let screenRects = NSScreen.screens.map { MenuBarScanner.cgRect(for: $0) }
+        let referenceRow = ScreenRows.reference(rows: ScreenRows.split(items: scannedBarItems, screens: screenRects))
+        physicalOrder = Self.mergedOrder(previous: physicalOrder, current: referenceRow.map(\.stableId))
         SettingsStore.shared.merge(discovered: items)
         controlItems.ensureFireIconInLayout()
         NotificationCenter.default.post(name: Self.itemsDidChange, object: nil)

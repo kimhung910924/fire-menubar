@@ -16,9 +16,13 @@ struct EditorItem: Identifiable, Equatable {
     var isMisplaced: Bool
     /// 노치에 가려 실제 메뉴바에서 보이지 않는 항목.
     var isConcealed: Bool = false
+    /// 사용자가 FIRE_BAR로 지정한 적은 없지만, 경계에 말려들어 실제로는 Fire Bar에 같이
+    /// 숨겨진 항목. 실제 Fire Bar 패널에는 나타나므로 여기서도 보여줘야 두 목록이 맞는다.
+    var isCollateral: Bool = false
 
     static func == (lhs: EditorItem, rhs: EditorItem) -> Bool {
         lhs.id == rhs.id && lhs.isMisplaced == rhs.isMisplaced && lhs.isConcealed == rhs.isConcealed
+            && lhs.isCollateral == rhs.isCollateral
     }
 }
 
@@ -118,7 +122,30 @@ final class LayoutEditorModel: ObservableObject {
         //        여기에 희망 순서를 보여주면 눈앞의 메뉴바와 어긋나 보여 혼란만 준다.
         // FIRE_BAR — Fire Bar 패널에 그리는 순서. 전적으로 사용자가 정한다(기획안 10절).
         mainItems = makeItems(store.items(in: .main, orderedBy: layout.physicalOrder))
-        fireBarItems = makeItems(store.items(in: .fireBar))
+
+        // 실제 Fire Bar 패널은 사용자가 지정한 항목 뒤에 "말려든" 항목도 붙여서 그린다
+        // (`FireBarContents.ids` 참고 — 안 붙이면 그 아이콘에 닿을 방법이 없어진다).
+        // 여기서도 똑같이 붙여야 두 목록의 순서가 일치한다. 안 붙이면 사용자에게는
+        // "Fire Bar에 표시"와 실제 팝업 순서가 다르게 보인다(2026-09-09 사용자 지적).
+        let fireBarStoredIds = Set(store.items(in: .fireBar).map(\.stableId))
+        let collateralIds = layout.unintentionallyHiddenIds.union(layout.capacityOverflowIds)
+            .subtracting(fireBarStoredIds)
+        let collateralItems: [EditorItem] = layout.physicalOrder
+            .filter { collateralIds.contains($0) }
+            .compactMap { id in
+                guard let item = discovered[id] else { return nil }
+                return EditorItem(
+                    id: item.stableId,
+                    name: item.displayName,
+                    shortLabel: Self.shortLabel(stableId: item.stableId, ownerName: item.ownerName),
+                    image: layout.icon(for: item),
+                    isFireIcon: false,
+                    isMisplaced: false,
+                    isConcealed: item.isNotchConcealed,
+                    isCollateral: true
+                )
+            }
+        fireBarItems = makeItems(store.items(in: .fireBar)) + collateralItems
 
         conflictCount = layout.misplacedItemIds.count + layout.unintentionallyHiddenIds.count
 
@@ -594,11 +621,15 @@ struct LayoutEditorView: View {
         .padding(.vertical, 4).padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(item.isMisplaced ? Color.orange.opacity(0.25) : Color.clear)
+                .fill(item.isMisplaced ? Color.orange.opacity(0.25)
+                      : item.isCollateral ? Color.blue.opacity(0.15) : Color.clear)
         )
         .help(item.isMisplaced
               ? L10n.t("\(item.name) — 아직 실제 메뉴바에서 숨겨지지 않았습니다",
                        "\(item.name) — not yet hidden in the actual menu bar")
+              : item.isCollateral
+              ? L10n.t("\(item.name) — 직접 지정하지 않았지만 경계에 말려서 Fire Bar에 같이 숨겨져 있습니다",
+                       "\(item.name) — not assigned by you, but hidden here too because it got caught in the boundary")
               : item.name)
     }
 
